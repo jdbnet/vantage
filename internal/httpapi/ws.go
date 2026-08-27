@@ -253,6 +253,8 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	writeJSONLocked(map[string]any{"type": "ready", "conn_id": sess.ID, "label": sess.Label})
 
 	done := make(chan struct{})
+	stopKeep := make(chan struct{})
+	defer close(stopKeep)
 	go func() {
 		defer close(done)
 		buf := make([]byte, 32*1024)
@@ -273,6 +275,8 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 		for {
 			select {
 			case <-done:
+				return
+			case <-stopKeep:
 				return
 			case <-ticker.C:
 				writeJSONLocked(map[string]any{"type": "keepalive"})

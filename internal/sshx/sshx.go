@@ -109,10 +109,13 @@ func (r *Registry) Pop(id string) *Session {
 	return s
 }
 
-func (r *Registry) Count() int {
+func (r *Registry) CloseAll() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.m)
+	for id, s := range r.m {
+		s.Close()
+		delete(r.m, id)
+	}
 }
 
 func ResolveCreds(st *store.Store, box *cryptox.Box, hostID string) (store.HostRecord, Creds, error) {

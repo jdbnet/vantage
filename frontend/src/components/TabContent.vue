@@ -15,6 +15,7 @@ import "@xterm/xterm/css/xterm.css";
 import SftpPanel from "./SftpPanel.vue";
 import Guacamole from "guacamole-common-js";
 import { Maximize2, Minimize2, Search, X } from "@lucide/vue";
+import { addGuacKeySink, removeGuacKeySink, type GuacKeySink } from "@/guacKeyboard";
 
 const CLIPBOARD_MAX = 1024 * 1024;
 
@@ -68,13 +69,36 @@ let ro: ResizeObserver | null = null;
 let visibilityHandler: (() => void) | null = null;
 let pingInterval: number | null = null;
 let guacClient: InstanceType<typeof Guacamole.Client> | null = null;
-let guacKeyboard: InstanceType<typeof Guacamole.Keyboard> | null = null;
+let guacKeySink: GuacKeySink | null = null;
 let guacPasteHandler: ((ev: ClipboardEvent) => void) | null = null;
 let guacFocusHandler: ((ev: Event) => void) | null = null;
 let guacOutsideClick: ((ev: MouseEvent) => void) | null = null;
 let guacInputActive = false;
 let guacResizeTimer: number | null = null;
 let fullscreenHandler: (() => void) | null = null;
+let sessionAlive = true;
+
+function clearPingInterval() {
+  if (pingInterval) {
+    clearInterval(pingInterval);
+    pingInterval = null;
+  }
+}
+
+function closeSocket() {
+  if (!ws) return;
+  const socket = ws;
+  ws = null;
+  socket.onopen = null;
+  socket.onmessage = null;
+  socket.onerror = null;
+  socket.onclose = null;
+  try {
+    socket.close();
+  } catch {
+    /* ignore */
+  }
+}
 
 const isSSH = () => props.protocol === "ssh";
 
@@ -185,18 +209,15 @@ function replyHostKey(accept: boolean, replace: boolean) {
 function connectSsh() {
   serverBackOnline.value = false;
   hostKeyPrompt.value = null;
-  if (pingInterval) {
-    clearInterval(pingInterval);
-    pingInterval = null;
-  }
-  if (ws) {
-    ws.close();
-  }
+  clearPingInterval();
+  closeSocket();
+  if (!sessionAlive) return;
 
   ws = new WebSocket(wsUrl(props.hostId));
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
+    if (!sessionAlive) return;
     status.value = "Handshaking…";
     sendResize();
   };
@@ -219,10 +240,12 @@ function connectSsh() {
   };
 
   ws.onerror = () => {
+    if (!sessionAlive) return;
     status.value = "WebSocket error";
   };
 
   ws.onclose = () => {
+    if (!sessionAlive) return;
     hostKeyPrompt.value = null;
     if (connId.value) {
       status.value = "Session ended";
@@ -234,14 +257,16 @@ function connectSsh() {
       status.value = "Disconnected";
     }
 
+    clearPingInterval();
     pingInterval = window.setInterval(async () => {
+      if (!sessionAlive) {
+        clearPingInterval();
+        return;
+      }
       try {
         const { up } = await api.pingHost(props.hostId);
         if (up) {
-          if (pingInterval) {
-            clearInterval(pingInterval);
-            pingInterval = null;
-          }
+          clearPingInterval();
           serverBackOnline.value = true;
         }
       } catch {
@@ -331,11 +356,9 @@ function sendGuacClipboard(text: string) {
 
 function disposeGuacInput() {
   const wrap = guacEl.value;
-  if (guacKeyboard) {
-    guacKeyboard.onkeydown = null;
-    guacKeyboard.onkeyup = null;
-    guacKeyboard.reset();
-    guacKeyboard = null;
+  if (guacKeySink) {
+    removeGuacKeySink(guacKeySink);
+    guacKeySink = null;
   }
   if (guacPasteHandler && wrap) {
     wrap.removeEventListener("paste", guacPasteHandler);
@@ -368,19 +391,18 @@ function attachGuacInput(displayEl: HTMLElement) {
     };
     document.addEventListener("mousedown", guacOutsideClick, true);
   }
-  if (!guacKeyboard) {
-    guacKeyboard = new Guacamole.Keyboard(document);
+  if (!guacKeySink) {
+    guacKeySink = {
+      isActive: () => guacDisplayFocused() && !isEditableTarget(document.activeElement),
+      keydown: (keysym: number) => {
+        guacClient?.sendKeyEvent(1, keysym);
+      },
+      keyup: (keysym: number) => {
+        guacClient?.sendKeyEvent(0, keysym);
+      },
+    };
+    addGuacKeySink(guacKeySink);
   }
-  guacKeyboard.onkeydown = (keysym: number) => {
-    if (!guacDisplayFocused() || isEditableTarget(document.activeElement)) return true;
-    guacClient?.sendKeyEvent(1, keysym);
-    return false;
-  };
-  guacKeyboard.onkeyup = (keysym: number) => {
-    if (!guacDisplayFocused() || isEditableTarget(document.activeElement)) return true;
-    guacClient?.sendKeyEvent(0, keysym);
-    return true;
-  };
   if (!guacPasteHandler) {
     guacPasteHandler = (ev: ClipboardEvent) => {
       if (!guacDisplayFocused()) return;
@@ -417,18 +439,17 @@ function attachGuacInput(displayEl: HTMLElement) {
 function connectGuac() {
   serverBackOnline.value = false;
   status.value = "Connecting to display…";
-  if (!guacEl.value) return;
+  if (!guacEl.value || !sessionAlive) return;
   try {
     guacClient?.disconnect();
   } catch {
     /* ignore */
   }
   guacClient = null;
-  if (guacEl.value) {
-    guacEl.value.replaceChildren();
-  }
+  guacEl.value.replaceChildren();
   const tunnel = new Guacamole.WebSocketTunnel(`${wsOrigin()}/ws/guac`);
   const onGuacError = (e: { message?: string; code?: number }) => {
+    if (!sessionAlive) return;
     status.value = guacStatusText(e);
   };
   tunnel.onerror = onGuacError;
@@ -514,6 +535,7 @@ onMounted(async () => {
     if (!termEl.value) return;
     term = new Terminal({
       cursorBlink: true,
+      scrollback: 1000,
       fontFamily: props.settings?.terminal_font_family || "DM Mono, ui-monospace, monospace",
       fontSize: props.settings?.terminal_font_size || 14,
       theme: terminalTheme(),
@@ -582,10 +604,8 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  if (pingInterval) {
-    clearInterval(pingInterval);
-    pingInterval = null;
-  }
+  sessionAlive = false;
+  clearPingInterval();
   if (guacResizeTimer) {
     window.clearTimeout(guacResizeTimer);
     guacResizeTimer = null;
@@ -601,9 +621,12 @@ onUnmounted(() => {
   disposeGuacInput();
   ro?.disconnect();
   ro = null;
-  ws?.close();
-  ws = null;
-  term?.dispose();
+  closeSocket();
+  try {
+    term?.dispose();
+  } catch {
+    /* ignore */
+  }
   term = null;
   fit = null;
   searchAddon = null;
@@ -613,6 +636,8 @@ onUnmounted(() => {
     /* ignore */
   }
   guacClient = null;
+  guacEl.value?.replaceChildren();
+  termEl.value?.replaceChildren();
 });
 
 watch(

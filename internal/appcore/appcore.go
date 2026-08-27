@@ -77,6 +77,7 @@ func (c *Core) Close() error {
 		if c.syncStop != nil {
 			c.syncStop()
 		}
+		c.Conns.CloseAll()
 		err = c.Store.Close()
 	})
 	return err
