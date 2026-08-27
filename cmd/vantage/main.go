@@ -32,9 +32,13 @@ func main() {
 	}()
 
 	err = wails.Run(&options.App{
-		Title:  "Vantage",
-		Width:  1400,
-		Height: 900,
+		Title:     "Vantage",
+		Width:     1400,
+		Height:    900,
+		MinWidth:  800,
+		MinHeight: 600,
+		MaxWidth:  16384,
+		MaxHeight: 16384,
 		AssetServer: &assetserver.Options{
 			Handler: core.Handler(),
 		},
