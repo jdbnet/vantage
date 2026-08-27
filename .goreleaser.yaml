@@ -42,6 +42,8 @@ dockers:
     build_flag_templates:
       - "--pull"
       - "--platform=linux/amd64"
+      - "--provenance=false"
+      - "--sbom=false"
       - "--label=org.opencontainers.image.title=vantaged"
       - "--label=org.opencontainers.image.description=Vantage daemon"
       - "--label=org.opencontainers.image.source=https://github.com/jdbnet/vantage"
@@ -59,6 +61,8 @@ dockers:
     build_flag_templates:
       - "--pull"
       - "--platform=linux/arm64"
+      - "--provenance=false"
+      - "--sbom=false"
       - "--label=org.opencontainers.image.title=vantaged"
       - "--label=org.opencontainers.image.description=Vantage daemon"
       - "--label=org.opencontainers.image.source=https://github.com/jdbnet/vantage"
