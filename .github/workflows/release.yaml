@@ -61,12 +61,21 @@ jobs:
         if: matrix.target == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev gcc pkg-config
-          sudo apt-get install -y libwebkit2gtk-4.1-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
+          sudo apt-get install -y gcc pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 
       - name: Install NSIS and MinGW
         if: matrix.target == 'windows'
-        run: choco install nsis mingw -y
+        run: |
+          choco install nsis mingw -y --no-progress
+          Add-Content -Path $env:GITHUB_PATH -Value "${env:ProgramFiles(x86)}\NSIS"
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:ProgramFiles\NSIS"
+
+      - name: Verify makensis
+        if: matrix.target == 'windows'
+        shell: bash
+        run: |
+          command -v makensis
+          makensis -VERSION
 
       - name: Install Wails
         shell: bash
@@ -91,7 +100,9 @@ jobs:
       - name: Build Linux
         if: matrix.target == 'linux'
         working-directory: cmd/vantage
-        run: wails build -ldflags "-s -w -X github.com/jdbnet/vantage/internal/appcore.Version=${{ env.VERSION }}"
+        env:
+          VANTAGE_NO_INSTALL: "1"
+        run: wails build -tags webkit2_41 -ldflags "-s -w -X github.com/jdbnet/vantage/internal/appcore.Version=${{ env.VERSION }}"
 
       - name: Stage Windows installer
         if: matrix.target == 'windows'
@@ -99,6 +110,11 @@ jobs:
         run: |
           mkdir -p desktop-artifacts
           installer=$(find cmd/vantage/build/bin -name '*installer.exe' | head -n 1)
+          if [ -z "$installer" ]; then
+            echo "NSIS installer not found under cmd/vantage/build/bin"
+            ls -la cmd/vantage/build/bin || true
+            exit 1
+          fi
           cp "$installer" "desktop-artifacts/vantage_${VERSION}_windows_amd64-setup.exe"
 
       - name: Stage macOS zip

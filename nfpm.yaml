@@ -23,6 +23,6 @@ overrides:
   deb:
     depends:
       - libgtk-3-0 | libgtk-3-0t64
-      - libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37
+      - libwebkit2gtk-4.1-0 | libwebkit2gtk-4.1-0t64
 deb:
   compression: gzip

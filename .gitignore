@@ -24,6 +24,8 @@ internal/httpapi/dist/*
 # Wails generated output
 cmd/vantage/build/bin/
 cmd/vantage/frontend/
+cmd/vantage/build/windows/installer/wails_tools.nsh
+cmd/vantage/build/windows/installer/tmp/
 desktop-artifacts/
 
 # GoReleaser output

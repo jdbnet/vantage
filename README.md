@@ -41,7 +41,7 @@ chmod +x vantage_*_linux_amd64
 ./vantage_*_linux_amd64
 ```
 
-On first launch it copies itself to `~/.local/share/vantage/`, adds a **Vantage** entry to your application menu, and starts from there. No root required.
+On first launch it copies itself to `~/.local/share/vantage/`, adds a **Vantage** entry to your application menu, and starts from there. No root required. Needs GTK 3 and WebKitGTK 4.1.
 
 ## First launch
 
