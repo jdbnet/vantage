@@ -29,6 +29,7 @@ type Deps struct {
 	Conns           *sshx.Registry
 	DataDir         string
 	Mode            string
+	Listen          string
 	Version         string
 	NeedsSetup      func() bool
 	Setup           func(username, password string) error
@@ -300,6 +301,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"app_version":       s.d.Version,
 		"audit_log_enabled": st.AuditLogEnabled,
 		"mode":              s.d.Mode,
+		"listen":            s.d.Listen,
 	})
 }
 

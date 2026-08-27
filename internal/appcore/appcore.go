@@ -103,6 +103,7 @@ func (c *Core) Handler() http.Handler {
 		Conns:           c.Conns,
 		DataDir:         c.DataDir,
 		Mode:            c.Mode,
+		Listen:          c.Listen,
 		Version:         c.Version,
 		NeedsSetup:      c.NeedsSetup,
 		Setup:           c.Setup,

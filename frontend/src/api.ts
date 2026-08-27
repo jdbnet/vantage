@@ -18,6 +18,59 @@ export function setSessionToken(token: string | null): void {
   }
 }
 
+let wsListen = "";
+
+function isWailsOrigin(): boolean {
+  const protocol = location.protocol;
+  const host = location.hostname || location.host;
+  return (
+    protocol.startsWith("wails") ||
+    host === "wails" ||
+    host === "wails.localhost" ||
+    host.endsWith(".wails.localhost")
+  );
+}
+
+function normalizeListen(addr: string): string {
+  let a = addr.trim();
+  a = a.replace(/^https?:\/\//, "");
+  if (a.startsWith(":")) {
+    a = "127.0.0.1" + a;
+  }
+  return a;
+}
+
+export function setWsListen(addr: string, mode?: string): void {
+  if ((mode === "desktop" || isWailsOrigin()) && addr) {
+    wsListen = normalizeListen(addr);
+    return;
+  }
+  if (isWailsOrigin()) {
+    wsListen = "127.0.0.1:7688";
+    return;
+  }
+  wsListen = "";
+}
+
+export function wsOrigin(): string {
+  if (wsListen) {
+    return "ws://" + wsListen;
+  }
+  if (isWailsOrigin()) {
+    return "ws://127.0.0.1:7688";
+  }
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}`;
+}
+
+export function wsURL(path: string, params: Record<string, string> = {}): string {
+  const q = new URLSearchParams(params);
+  const tok = sessionToken();
+  if (tok) q.set("token", tok);
+  const qs = q.toString();
+  return `${wsOrigin()}${path}${qs ? `?${qs}` : ""}`;
+}
+
 export function authQuery(): string {
   const t = sessionToken();
   return t ? `token=${encodeURIComponent(t)}` : "";
@@ -74,9 +127,19 @@ export const api = {
     app_version?: string;
     audit_log_enabled?: boolean;
     mode?: string;
+    listen?: string;
   }> {
     const res = await apiFetch("/api/me", { credentials: "include" });
-    return handle(res);
+    const data = await handle<{
+      logged_in: boolean;
+      needs_setup?: boolean;
+      app_version?: string;
+      audit_log_enabled?: boolean;
+      mode?: string;
+      listen?: string;
+    }>(res);
+    setWsListen(data.listen || "", data.mode);
+    return data;
   },
 
   async setup(username: string, password: string): Promise<void> {

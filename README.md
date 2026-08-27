@@ -86,6 +86,15 @@ volumes:
   vantaged-data:
 ```
 
+A bind mount (`./data:/data`) is fine too. The image runs as UID 65532, so that host directory must be writable by that user:
+
+```bash
+mkdir -p data
+sudo chown 65532:65532 data
+```
+
+A named volume does this for you. If you bind-mount a directory owned by your login user, SQLite fails with `unable to open database file (14)`.
+
 Images are tagged with the release version (`ghcr.io/jdbnet/vantaged:1.2.3`) and `latest`. Architectures: `linux/amd64` and `linux/arm64`.
 
 ## Sync desktop with vantaged
