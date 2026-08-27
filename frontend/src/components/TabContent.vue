@@ -75,6 +75,8 @@ let guacFocusHandler: ((ev: Event) => void) | null = null;
 let guacOutsideClick: ((ev: MouseEvent) => void) | null = null;
 let guacInputActive = false;
 let guacResizeTimer: number | null = null;
+let lastGuacRemoteW = 0;
+let lastGuacRemoteH = 0;
 let fullscreenHandler: (() => void) | null = null;
 let sessionAlive = true;
 
@@ -293,22 +295,28 @@ function guacStatusText(e: { message?: string; code?: number } | undefined): str
   }
 }
 
-function guacViewport(): { width: number; height: number } {
+function guacElementSize(): { width: number; height: number } | null {
   const el = guacEl.value;
-  const fallbackW = props.settings?.display_width || 1920;
-  const fallbackH = props.settings?.display_height || 1080;
-  const width = Math.max(el?.clientWidth || 0, 0);
-  const height = Math.max(el?.clientHeight || 0, 0);
-  return {
-    width: width >= 320 ? width : fallbackW,
-    height: height >= 240 ? height : fallbackH,
-  };
+  if (!el) return null;
+  const width = Math.round(el.clientWidth);
+  const height = Math.round(el.clientHeight);
+  if (width < 320 || height < 240) return null;
+  return { width, height };
+}
+
+function guacConnectSize(): { width: number; height: number } {
+  return (
+    guacElementSize() ?? {
+      width: props.settings?.display_width || 1920,
+      height: props.settings?.display_height || 1080,
+    }
+  );
 }
 
 function fitGuacDisplay() {
   const el = guacEl.value;
   const display = guacClient?.getDisplay();
-  if (!el || !display) return;
+  if (!el || !display || !props.visible) return;
   const dw = display.getWidth();
   const dh = display.getHeight();
   if (!dw || !dh) return;
@@ -319,13 +327,21 @@ function fitGuacDisplay() {
 }
 
 function scheduleGuacRemoteResize() {
+  if (!props.visible || !guacClient) return;
   if (guacResizeTimer) {
     window.clearTimeout(guacResizeTimer);
   }
   guacResizeTimer = window.setTimeout(() => {
-    if (!guacClient) return;
-    const { width, height } = guacViewport();
-    guacClient.sendSize(width, height);
+    if (!props.visible || !guacClient) return;
+    const size = guacElementSize();
+    if (!size) return;
+    if (size.width === lastGuacRemoteW && size.height === lastGuacRemoteH) {
+      fitGuacDisplay();
+      return;
+    }
+    lastGuacRemoteW = size.width;
+    lastGuacRemoteH = size.height;
+    guacClient.sendSize(size.width, size.height);
     fitGuacDisplay();
   }, 200);
 }
@@ -469,7 +485,9 @@ function connectGuac() {
     }
   };
   attachGuacInput(displayEl);
-  const { width, height } = guacViewport();
+  const { width, height } = guacConnectSize();
+  lastGuacRemoteW = width;
+  lastGuacRemoteH = height;
   try {
     const q = new URLSearchParams({
       host_id: props.hostId,
@@ -584,6 +602,7 @@ onMounted(async () => {
     connectGuac();
     if (guacEl.value) {
       ro = new ResizeObserver(() => {
+        if (!props.visible) return;
         fitGuacDisplay();
         scheduleGuacRemoteResize();
       });
@@ -647,6 +666,7 @@ watch(
       await nextTick();
       fitAndResize();
       fitGuacDisplay();
+      scheduleGuacRemoteResize();
       term?.focus();
       sendPing();
     }
