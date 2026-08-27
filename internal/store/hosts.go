@@ -376,37 +376,54 @@ func (s *Store) ListTags() ([]string, error) {
 	return out, rows.Err()
 }
 
+func appendFolderScope(where string, args []any, folderID *string) (string, []any) {
+	if folderID == nil {
+		return where, args
+	}
+	where += ` AND h.folder_id IN (
+		WITH RECURSIVE subtree(id) AS (
+			SELECT id FROM folders WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT f.id FROM folders f
+			INNER JOIN subtree s ON f.parent_id = s.id
+			WHERE f.deleted_at IS NULL
+		)
+		SELECT id FROM subtree
+	)`
+	return where, append(args, *folderID)
+}
+
 func (s *Store) Browse(folderID *string, q string) (model.BrowseResult, error) {
 	q = strings.TrimSpace(q)
 	res := model.BrowseResult{Folders: []model.Folder{}, Hosts: []model.Host{}, Breadcrumb: []model.Folder{}}
+	bc, err := s.breadcrumb(folderID)
+	if err != nil {
+		return res, err
+	}
+	res.Breadcrumb = bc
+
 	if q != "" {
 		res.SearchActive = true
+		var hosts []model.Host
 		if strings.HasPrefix(strings.ToLower(q), "tag:") {
 			tag := NormalizeTag(strings.TrimSpace(q[4:]))
-			hosts, err := s.queryHosts(
-				`AND h.id IN (SELECT ht.host_id FROM host_tags ht JOIN tags t ON t.id = ht.tag_id WHERE t.name = ?)`,
-				tag,
-			)
-			if err != nil {
-				return res, err
-			}
-			res.Hosts = hosts
-			return res, nil
+			where := `AND h.id IN (SELECT ht.host_id FROM host_tags ht JOIN tags t ON t.id = ht.tag_id WHERE t.name = ?)`
+			args := []any{tag}
+			where, args = appendFolderScope(where, args, folderID)
+			hosts, err = s.queryHosts(where, args...)
+		} else {
+			like := "%" + escapeLike(q) + "%"
+			where := `AND (h.label LIKE ? ESCAPE '\' OR h.hostname LIKE ? ESCAPE '\')`
+			args := []any{like, like}
+			where, args = appendFolderScope(where, args, folderID)
+			hosts, err = s.queryHosts(where, args...)
 		}
-		like := "%" + escapeLike(q) + "%"
-		hosts, err := s.queryHosts(`AND (h.label LIKE ? ESCAPE '\' OR h.hostname LIKE ? ESCAPE '\')`, like, like)
 		if err != nil {
 			return res, err
 		}
 		res.Hosts = hosts
 		return res, nil
 	}
-
-	bc, err := s.breadcrumb(folderID)
-	if err != nil {
-		return res, err
-	}
-	res.Breadcrumb = bc
 
 	folderSQL := `SELECT id, parent_id, label, created_at, updated_at FROM folders WHERE deleted_at IS NULL AND `
 	var folderArgs []any

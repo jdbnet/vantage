@@ -3,6 +3,8 @@ package store
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/jdbnet/vantage/internal/model"
 )
 
 func TestFolderHostIdentityRoundTrip(t *testing.T) {
@@ -80,6 +82,107 @@ func TestFolderHostIdentityRoundTrip(t *testing.T) {
 	}
 	if err := s.DeleteIdentity(iid); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func hostLabels(hosts []model.Host) []string {
+	out := make([]string, len(hosts))
+	for i, h := range hosts {
+		out[i] = h.Label
+	}
+	return out
+}
+
+func containsLabel(hosts []model.Host, label string) bool {
+	for _, h := range hosts {
+		if h.Label == label {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBrowseSearchScopedToFolder(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "vantage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	iid, err := s.CreateIdentity("root", "password", "blob", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mkHost := func(folder *string, label string, tags []string) {
+		t.Helper()
+		if _, err := s.CreateHost(HostWrite{
+			FolderID:   folder,
+			Label:      label,
+			Hostname:   label + ".example",
+			Port:       22,
+			Protocol:   "ssh",
+			IdentityID: &iid,
+			Tags:       tags,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	prod, err := s.CreateFolder("prod", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := s.CreateFolder("db", &prod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.CreateFolder("other", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mkHost(nil, "root-alpha", []string{"shared"})
+	mkHost(&prod, "prod-alpha", nil)
+	mkHost(&db, "db-alpha", []string{"shared"})
+	mkHost(&other, "other-alpha", []string{"shared"})
+
+	fromProd, err := s.Browse(&prod, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fromProd.SearchActive || len(fromProd.Breadcrumb) != 1 || fromProd.Breadcrumb[0].ID != prod {
+		t.Fatalf("prod search meta %+v", fromProd)
+	}
+	if len(fromProd.Hosts) != 2 || containsLabel(fromProd.Hosts, "root-alpha") || containsLabel(fromProd.Hosts, "other-alpha") {
+		t.Fatalf("prod search hosts %v", hostLabels(fromProd.Hosts))
+	}
+	if !containsLabel(fromProd.Hosts, "prod-alpha") || !containsLabel(fromProd.Hosts, "db-alpha") {
+		t.Fatalf("prod search missing descendants %v", hostLabels(fromProd.Hosts))
+	}
+
+	fromDB, err := s.Browse(&db, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fromDB.Hosts) != 1 || fromDB.Hosts[0].Label != "db-alpha" || len(fromDB.Breadcrumb) != 2 {
+		t.Fatalf("db search %+v", fromDB)
+	}
+
+	fromRoot, err := s.Browse(nil, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fromRoot.Hosts) != 4 {
+		t.Fatalf("root search hosts %v", hostLabels(fromRoot.Hosts))
+	}
+
+	tagged, err := s.Browse(&prod, "tag:shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tagged.Hosts) != 1 || tagged.Hosts[0].Label != "db-alpha" {
+		t.Fatalf("scoped tag search %v", hostLabels(tagged.Hosts))
 	}
 }
 

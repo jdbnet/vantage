@@ -1300,11 +1300,11 @@ async function deleteIdentityRow(id: string) {
           >
             Matches in
             {{
-              searchQuery.trim().toLowerCase().startsWith("tag:")
-                ? "all folders (tag search)"
-                : currentFolderId == null
-                  ? "all folders"
-                  : "this folder and below"
+              currentFolderId == null
+                ? searchQuery.trim().toLowerCase().startsWith("tag:")
+                  ? "all folders (tag search)"
+                  : "all folders"
+                : "this folder and below"
             }}
           </p>
           <nav class="mt-2 flex flex-wrap items-center gap-1 text-[11px] text-slate-400">
