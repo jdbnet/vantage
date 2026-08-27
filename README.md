@@ -79,7 +79,7 @@ services:
     volumes:
       - vantaged-data:/data
   guacd:
-    image: guacamole/guacd:1.5.5
+    image: guacamole/guacd:1.6.0
     ports:
       - "4822:4822"
 volumes:
