@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --accent: 30 190 138;
+  --accent-muted: 22 150 107;
+}
+
 html.dark,
 html {
   color-scheme: dark;

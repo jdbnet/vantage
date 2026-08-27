@@ -241,3 +241,20 @@ func TestChangeLogAndLWW(t *testing.T) {
 		t.Fatalf("lww failed: %+v", as)
 	}
 }
+
+func TestNormalizeAccentColor(t *testing.T) {
+	got, ok := NormalizeAccentColor("#1EBE8A")
+	if !ok || got != "#1ebe8a" {
+		t.Fatalf("got %q ok=%v", got, ok)
+	}
+	got, ok = NormalizeAccentColor("aabbcc")
+	if !ok || got != "#aabbcc" {
+		t.Fatalf("got %q ok=%v", got, ok)
+	}
+	if _, ok := NormalizeAccentColor("mint"); ok {
+		t.Fatal("expected invalid")
+	}
+	if _, ok := NormalizeAccentColor("#fff"); ok {
+		t.Fatal("expected 6-digit only")
+	}
+}

@@ -78,7 +78,7 @@ function submit() {
           </button>
           <button
             type="submit"
-            class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black hover:bg-[#16966b]"
+            class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black hover:bg-accent-muted"
           >
             Save snippet
           </button>

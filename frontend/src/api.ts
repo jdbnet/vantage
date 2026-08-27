@@ -128,6 +128,7 @@ export const api = {
     audit_log_enabled?: boolean;
     mode?: string;
     listen?: string;
+    accent_color?: string;
   }> {
     const res = await apiFetch("/api/me", { credentials: "include" });
     const data = await handle<{
@@ -137,6 +138,7 @@ export const api = {
       audit_log_enabled?: boolean;
       mode?: string;
       listen?: string;
+      accent_color?: string;
     }>(res);
     setWsListen(data.listen || "", data.mode);
     return data;
@@ -723,6 +725,7 @@ export interface Settings {
   display_color_depth: number;
   display_width: number;
   display_height: number;
+  accent_color: string;
   shared_files_dir: string;
   sync_url: string;
   sync_api_key_set: boolean;

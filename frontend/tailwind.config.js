@@ -10,8 +10,8 @@ export default {
           overlay: "#21262d",
         },
         accent: {
-          DEFAULT: "#1ebe8a",
-          muted: "#16966b",
+          DEFAULT: "rgb(var(--accent) / <alpha-value>)",
+          muted: "rgb(var(--accent-muted) / <alpha-value>)",
         },
         slate: {
           200: "#e6edf3",

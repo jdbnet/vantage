@@ -302,6 +302,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"audit_log_enabled": st.AuditLogEnabled,
 		"mode":              s.d.Mode,
 		"listen":            s.d.Listen,
+		"accent_color":      st.AccentColor,
 	})
 }
 

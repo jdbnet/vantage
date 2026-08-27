@@ -17,6 +17,7 @@ import LoginForm from "@/components/LoginForm.vue";
 import TabContent from "@/components/TabContent.vue";
 import TagInput from "@/components/TagInput.vue";
 import SnippetForm from "@/components/SnippetForm.vue";
+import { applyAccent, DEFAULT_ACCENT, normalizeAccent } from "@/theme";
 
 interface TabItem {
   id: string;
@@ -222,10 +223,27 @@ const settingsForm = ref({
   display_color_depth: 24,
   display_width: 1920,
   display_height: 1080,
+  accent_color: DEFAULT_ACCENT,
   sync_url: "",
   sync_api_key: "",
   audit_log_enabled: true,
 });
+
+watch(
+  () =>
+    showSettings.value
+      ? settingsForm.value.accent_color
+      : appSettings.value?.accent_color,
+  (hex) => applyAccent(hex),
+);
+
+function onAccentPicker(ev: Event) {
+  const el = ev.target;
+  if (el instanceof HTMLInputElement) {
+    settingsForm.value.accent_color = el.value;
+  }
+}
+
 const passwordForm = ref({
   current: "",
   next: "",
@@ -476,6 +494,7 @@ onMounted(async () => {
   try {
     const m = await api.me();
     loggedIn.value = m.logged_in;
+    applyAccent(m.accent_color);
     if (m.mode) {
       appMode.value = m.mode;
     }
@@ -501,6 +520,7 @@ async function onLoggedIn() {
   try {
     const m = await api.me();
     if (m.mode) appMode.value = m.mode;
+    applyAccent(m.accent_color);
   } catch {
     /* still load inventory */
   }
@@ -716,6 +736,7 @@ async function openSettings() {
       display_color_depth: st.display_color_depth,
       display_width: st.display_width,
       display_height: st.display_height,
+      accent_color: normalizeAccent(st.accent_color),
       sync_url: st.sync_url,
       sync_api_key: "",
       audit_log_enabled: st.audit_log_enabled,
@@ -730,6 +751,7 @@ async function submitSettings() {
   settingsErr.value = "";
   try {
     const body: Record<string, unknown> = { ...settingsForm.value };
+    body.accent_color = normalizeAccent(settingsForm.value.accent_color);
     if (!settingsForm.value.sync_api_key) delete body.sync_api_key;
     appSettings.value = await api.patchSettings(body);
     settingsForm.value.sync_api_key = "";
@@ -1635,7 +1657,7 @@ async function deleteIdentityRow(id: string) {
           </div>
           <button
             type="submit"
-            class="mt-4 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-slate-950 hover:bg-sky-400 disabled:opacity-50"
+            class="mt-4 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-slate-950 hover:bg-accent-muted disabled:opacity-50"
             :disabled="apiKeyCreating || !apiKeyForm.scopes.length"
           >
             {{ apiKeyCreating ? "Creating…" : "Create key" }}
@@ -1778,7 +1800,7 @@ async function deleteIdentityRow(id: string) {
           <h2 class="text-lg font-semibold text-white">Identities</h2>
           <button
             type="button"
-            class="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-slate-950 hover:bg-sky-400"
+            class="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-slate-950 hover:bg-accent-muted"
             @click="openNewIdentity"
           >
             Add identity
@@ -2425,6 +2447,27 @@ async function deleteIdentityRow(id: string) {
         <input v-model="settingsForm.terminal_font_family" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
         <label class="mt-3 block text-xs uppercase text-slate-500">Font size</label>
         <input v-model.number="settingsForm.terminal_font_size" type="number" min="8" max="32" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        <label class="mt-3 block text-xs uppercase text-slate-500">Accent colour</label>
+        <div class="mt-1 flex items-center gap-2">
+          <input
+            type="color"
+            :value="normalizeAccent(settingsForm.accent_color)"
+            class="h-9 w-12 cursor-pointer rounded border border-slate-700 bg-surface-overlay"
+            @input="onAccentPicker"
+          />
+          <input
+            v-model="settingsForm.accent_color"
+            class="min-w-0 flex-1 rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 font-mono text-sm"
+            placeholder="#1ebe8a"
+          />
+          <button
+            type="button"
+            class="rounded border border-slate-700 px-2 py-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-white"
+            @click="settingsForm.accent_color = DEFAULT_ACCENT"
+          >
+            Default
+          </button>
+        </div>
         <label class="mt-3 block text-xs uppercase text-slate-500">Display width / height / color depth</label>
         <div class="mt-1 flex gap-2">
           <input v-model.number="settingsForm.display_width" type="number" class="w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />

@@ -129,6 +129,7 @@ type Settings struct {
 	DisplayColorDepth  int    `json:"display_color_depth"`
 	DisplayWidth       int    `json:"display_width"`
 	DisplayHeight      int    `json:"display_height"`
+	AccentColor        string `json:"accent_color"`
 	SyncURL            string `json:"sync_url"`
 	SyncAPIKeySet      bool   `json:"sync_api_key_set"`
 	AuditLogEnabled    bool   `json:"audit_log_enabled"`

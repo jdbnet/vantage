@@ -255,9 +255,25 @@ func (s *Store) DefaultSettings() model.Settings {
 		DisplayColorDepth:  24,
 		DisplayWidth:       1920,
 		DisplayHeight:      1080,
+		AccentColor:        "#1ebe8a",
 		AuditLogEnabled:    true,
 		ReplicaID:          s.replicaID,
 	}
+}
+
+func NormalizeAccentColor(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "#")
+	if len(s) != 6 {
+		return "", false
+	}
+	for i := 0; i < 6; i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return "", false
+		}
+	}
+	return "#" + strings.ToLower(s), true
 }
 
 func (s *Store) LoadSettings() (model.Settings, error) {
@@ -301,6 +317,11 @@ func (s *Store) LoadSettings() (model.Settings, error) {
 			st.DisplayHeight = n
 		}
 	}
+	if v, ok, _ := s.Meta("accent_color"); ok {
+		if n, valid := NormalizeAccentColor(v); valid {
+			st.AccentColor = n
+		}
+	}
 	if v, ok, _ := s.Meta("sync_url"); ok {
 		st.SyncURL = v
 	}
@@ -319,11 +340,18 @@ func (s *Store) SaveSettings(patch map[string]string) error {
 		"listen_addr": {}, "guacd_addr": {}, "shared_files_dir": {}, "terminal_theme": {},
 		"terminal_font_family": {}, "terminal_font_size": {},
 		"display_color_depth": {}, "display_width": {}, "display_height": {},
-		"sync_url": {}, "sync_api_key": {}, "audit_log_enabled": {},
+		"accent_color": {}, "sync_url": {}, "sync_api_key": {}, "audit_log_enabled": {},
 	}
 	for k, v := range patch {
 		if _, ok := allowed[k]; !ok {
 			continue
+		}
+		if k == "accent_color" {
+			n, valid := NormalizeAccentColor(v)
+			if !valid {
+				return fmt.Errorf("invalid accent_color")
+			}
+			v = n
 		}
 		if err := s.SetMeta(k, v); err != nil {
 			return err

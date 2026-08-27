@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { api } from "@/api";
+import { applyAccent } from "@/theme";
 
 const emit = defineEmits<{ loggedIn: [] }>();
 
@@ -15,6 +16,7 @@ onMounted(async () => {
   try {
     const m = await api.me();
     needsSetup.value = Boolean(m.needs_setup);
+    applyAccent(m.accent_color);
   } catch {
     needsSetup.value = false;
   } finally {
@@ -78,7 +80,7 @@ async function submit() {
         <button
           type="submit"
           :disabled="busy"
-          class="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50"
+          class="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-slate-950 transition hover:bg-accent-muted disabled:opacity-50"
         >
           {{ busy ? "Working…" : needsSetup ? "Create account" : "Sign in" }}
         </button>
