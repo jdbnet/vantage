@@ -6,7 +6,7 @@ import {
   watch,
   nextTick,
 } from "vue";
-import { api, sessionToken, wsURL, type HostProtocol, type Settings } from "@/api";
+import { api, sessionToken, wsOrigin, wsURL, type HostProtocol, type Settings } from "@/api";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -71,6 +71,8 @@ let guacClient: InstanceType<typeof Guacamole.Client> | null = null;
 let guacKeyboard: InstanceType<typeof Guacamole.Keyboard> | null = null;
 let guacPasteHandler: ((ev: ClipboardEvent) => void) | null = null;
 let guacFocusHandler: ((ev: Event) => void) | null = null;
+let guacOutsideClick: ((ev: MouseEvent) => void) | null = null;
+let guacInputActive = false;
 let guacResizeTimer: number | null = null;
 let fullscreenHandler: (() => void) | null = null;
 
@@ -304,10 +306,19 @@ function scheduleGuacRemoteResize() {
 }
 
 function guacDisplayFocused(): boolean {
-  const el = guacEl.value;
-  if (!el) return false;
-  const active = document.activeElement;
-  return active === el || el.contains(active);
+  return guacInputActive && props.visible;
+}
+
+function isEditableTarget(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+}
+
+function armGuacInput() {
+  const wrap = guacEl.value;
+  guacInputActive = true;
+  wrap?.focus({ preventScroll: true });
 }
 
 function sendGuacClipboard(text: string) {
@@ -334,6 +345,11 @@ function disposeGuacInput() {
     wrap.removeEventListener("mousedown", guacFocusHandler);
   }
   guacFocusHandler = null;
+  if (guacOutsideClick) {
+    document.removeEventListener("mousedown", guacOutsideClick, true);
+    guacOutsideClick = null;
+  }
+  guacInputActive = false;
 }
 
 function attachGuacInput(displayEl: HTMLElement) {
@@ -341,25 +357,33 @@ function attachGuacInput(displayEl: HTMLElement) {
   if (!wrap) return;
   wrap.tabIndex = 0;
   if (!guacFocusHandler) {
-    guacFocusHandler = () => wrap.focus();
+    guacFocusHandler = () => armGuacInput();
     wrap.addEventListener("mousedown", guacFocusHandler);
   }
+  if (!guacOutsideClick) {
+    guacOutsideClick = (ev: MouseEvent) => {
+      if (!wrap.contains(ev.target as Node)) {
+        guacInputActive = false;
+      }
+    };
+    document.addEventListener("mousedown", guacOutsideClick, true);
+  }
   if (!guacKeyboard) {
-    guacKeyboard = new Guacamole.Keyboard(wrap);
+    guacKeyboard = new Guacamole.Keyboard(document);
   }
   guacKeyboard.onkeydown = (keysym: number) => {
-    if (!props.visible || !guacDisplayFocused()) return true;
+    if (!guacDisplayFocused() || isEditableTarget(document.activeElement)) return true;
     guacClient?.sendKeyEvent(1, keysym);
     return false;
   };
   guacKeyboard.onkeyup = (keysym: number) => {
-    if (!props.visible || !guacDisplayFocused()) return true;
+    if (!guacDisplayFocused() || isEditableTarget(document.activeElement)) return true;
     guacClient?.sendKeyEvent(0, keysym);
     return true;
   };
   if (!guacPasteHandler) {
     guacPasteHandler = (ev: ClipboardEvent) => {
-      if (!props.visible || !guacDisplayFocused()) return;
+      if (!guacDisplayFocused()) return;
       const text = ev.clipboardData?.getData("text/plain") || "";
       if (!text || text.length > CLIPBOARD_MAX) return;
       ev.preventDefault();
@@ -385,6 +409,7 @@ function attachGuacInput(displayEl: HTMLElement) {
   }
   const mouse = new Guacamole.Mouse(displayEl);
   mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState: unknown) => {
+    armGuacInput();
     guacClient?.sendMouseState(mouseState as never, true);
   };
 }
@@ -402,7 +427,7 @@ function connectGuac() {
   if (guacEl.value) {
     guacEl.value.replaceChildren();
   }
-  const tunnel = new Guacamole.WebSocketTunnel(wsURL("/ws/guac"));
+  const tunnel = new Guacamole.WebSocketTunnel(`${wsOrigin()}/ws/guac`);
   const onGuacError = (e: { message?: string; code?: number }) => {
     status.value = guacStatusText(e);
   };
@@ -417,7 +442,7 @@ function connectGuac() {
     if (state === 3) {
       status.value = "";
       fitGuacDisplay();
-      guacEl.value?.focus();
+      armGuacInput();
     } else if (state === 5 && !status.value) {
       status.value = "Display disconnected";
     }
@@ -425,11 +450,14 @@ function connectGuac() {
   attachGuacInput(displayEl);
   const { width, height } = guacViewport();
   try {
+    const q = new URLSearchParams({
+      host_id: props.hostId,
+      width: String(width),
+      height: String(height),
+    });
     const tok = sessionToken();
-    const tokenQ = tok ? `&token=${encodeURIComponent(tok)}` : "";
-    guacClient.connect(
-      `host_id=${encodeURIComponent(props.hostId)}&width=${width}&height=${height}${tokenQ}`,
-    );
+    if (tok) q.set("token", tok);
+    guacClient.connect(q.toString());
   } catch (e) {
     status.value = e instanceof Error ? e.message : "Failed to connect";
   }
