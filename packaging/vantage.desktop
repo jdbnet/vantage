@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Vantage
+Comment=SSH, VNC, and RDP client
+Exec=vantage
+Icon=vantage
+Terminal=false
+Categories=Network;RemoteAccess;
+StartupWMClass=vantage

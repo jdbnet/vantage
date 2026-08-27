@@ -1,0 +1,28 @@
+name: vantage
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+release: "1"
+section: net
+priority: optional
+maintainer: Jamie <jamie@jdbnet.co.uk>
+vendor: JDB Net
+homepage: https://github.com/jdbnet/vantage
+description: SSH, VNC, and RDP client
+file_name_template: vantage_${VERSION}_${ARCH}
+contents:
+  - src: ./cmd/vantage/build/bin/vantage
+    dst: /usr/bin/vantage
+    file_info:
+      mode: 0755
+  - src: ./packaging/vantage.desktop
+    dst: /usr/share/applications/vantage.desktop
+  - src: ./packaging/vantage.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/vantage.svg
+overrides:
+  deb:
+    depends:
+      - libgtk-3-0 | libgtk-3-0t64
+      - libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37
+deb:
+  compression: gzip

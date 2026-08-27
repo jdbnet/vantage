@@ -1,0 +1,34 @@
+# Binaries
+/vantaged
+/vantage
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Data
+*.db
+*.db-wal
+*.db-shm
+/data/
+
+# Frontend
+frontend/node_modules
+frontend/dist
+
+# Wails generated output
+cmd/vantage/build/bin/
+cmd/vantage/frontend/
+desktop-artifacts/
+dist/
+
+# IDE / OS
+.idea
+.vscode
+.DS_Store
+*.swp
+
+# Env
+.env
+.env.local

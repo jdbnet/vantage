@@ -1,0 +1,90 @@
+version: 2
+
+project_name: vantage
+
+before:
+  hooks:
+    - go mod tidy
+    - bash -c 'cd frontend && (npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund) && npm run build'
+
+builds:
+  - id: vantaged
+    main: ./cmd/vantaged
+    binary: vantaged
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/jdbnet/vantage/internal/appcore.Version={{.Version}}
+
+archives:
+  - id: vantaged
+    ids:
+      - vantaged
+    formats:
+      - none
+
+dockers:
+  - id: vantaged-amd64
+    ids:
+      - vantaged
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/jdbnet/vantaged:{{ .Version }}-amd64"
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title=vantaged"
+      - "--label=org.opencontainers.image.description=Vantage daemon"
+      - "--label=org.opencontainers.image.source=https://github.com/jdbnet/vantage"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+  - id: vantaged-arm64
+    ids:
+      - vantaged
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/jdbnet/vantaged:{{ .Version }}-arm64"
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title=vantaged"
+      - "--label=org.opencontainers.image.description=Vantage daemon"
+      - "--label=org.opencontainers.image.source=https://github.com/jdbnet/vantage"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+
+docker_manifests:
+  - name_template: "ghcr.io/jdbnet/vantaged:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/jdbnet/vantaged:{{ .Version }}-amd64"
+      - "ghcr.io/jdbnet/vantaged:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/jdbnet/vantaged:latest"
+    image_templates:
+      - "ghcr.io/jdbnet/vantaged:{{ .Version }}-amd64"
+      - "ghcr.io/jdbnet/vantaged:{{ .Version }}-arm64"
+
+changelog:
+  disable: true
+
+checksum:
+  extra_files:
+    - glob: desktop-artifacts/*
+
+release:
+  extra_files:
+    - glob: desktop-artifacts/*
+  github:
+    owner: jdbnet
+    name: vantage
