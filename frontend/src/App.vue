@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref, watch } from "vue";
 import { Folder, Pencil, Trash2, Radio, ChevronDown, Settings } from "@lucide/vue";
 import {
   api,
@@ -169,7 +169,26 @@ function onSplitDrop() {
   draggedTabId.value = null;
 }
 const loadErr = ref("");
-const hostSortOrder = ref<"name" | "last_connected">("name");
+const HOST_SORT_KEY = "vantage_host_sort";
+
+function loadHostSort(): "name" | "last_connected" {
+  try {
+    const v = localStorage.getItem(HOST_SORT_KEY);
+    if (v === "last_connected" || v === "name") return v;
+  } catch {
+    /* ignore */
+  }
+  return "name";
+}
+
+const hostSortOrder = ref<"name" | "last_connected">(loadHostSort());
+watch(hostSortOrder, (v) => {
+  try {
+    localStorage.setItem(HOST_SORT_KEY, v);
+  } catch {
+    /* ignore */
+  }
+});
 /** Narrow viewports: slide-over hosts panel; md+ sidebar stays visible */
 const sidebarOpen = ref(true);
 const hostUp = ref<Record<string, boolean | undefined>>({});
