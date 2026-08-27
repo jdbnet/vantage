@@ -131,7 +131,7 @@ jobs:
           chmod +x "desktop-artifacts/vantage_${VERSION}_linux_amd64"
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
           export ARCH=amd64
-          "$(go env GOPATH)/bin/nfpm" package --packager deb --config nfpm.yaml --target desktop-artifacts/
+          "$(go env GOPATH)/bin/nfpm" package --packager deb --config nfpm.yaml --target "desktop-artifacts/vantage_${VERSION}_${ARCH}.deb"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -9,7 +9,6 @@ maintainer: Jamie <jamie@jdbnet.co.uk>
 vendor: JDB Net
 homepage: https://github.com/jdbnet/vantage
 description: SSH, VNC, and RDP client
-file_name_template: vantage_${VERSION}_${ARCH}
 contents:
   - src: ./cmd/vantage/build/bin/vantage
     dst: /usr/bin/vantage
