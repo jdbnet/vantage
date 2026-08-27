@@ -17,11 +17,17 @@
 frontend/node_modules
 frontend/dist
 
+# Embedded UI: keep a placeholder so go:embed succeeds before Vite runs
+internal/httpapi/dist/*
+!internal/httpapi/dist/.gitkeep
+
 # Wails generated output
 cmd/vantage/build/bin/
 cmd/vantage/frontend/
 desktop-artifacts/
-dist/
+
+# GoReleaser output
+/dist/
 
 # IDE / OS
 .idea
