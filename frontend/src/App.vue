@@ -189,6 +189,7 @@ const showAuditLog = ref(false);
 const showApiKeys = ref(false);
 const showSftpPanel = ref(false);
 const showSettings = ref(false);
+const appMode = ref("");
 const appSettings = ref<AppSettings | null>(null);
 const settingsBusy = ref(false);
 const settingsErr = ref("");
@@ -439,6 +440,9 @@ async function refreshData() {
     allFolders.value = await api.listFoldersFlat();
     allTags.value = await api.listTags();
     appSettings.value = await api.getSettings();
+    if (appSettings.value.mode) {
+      appMode.value = appSettings.value.mode;
+    }
     await loadSnippets();
     if (!hostForm.value.identity_id && identities.value.length) {
       hostForm.value.identity_id = identities.value[0].id;
@@ -453,6 +457,9 @@ onMounted(async () => {
   try {
     const m = await api.me();
     loggedIn.value = m.logged_in;
+    if (m.mode) {
+      appMode.value = m.mode;
+    }
     if (m.app_version) {
       appVersion.value = m.app_version;
     }
@@ -472,6 +479,12 @@ onMounted(async () => {
 
 async function onLoggedIn() {
   loggedIn.value = true;
+  try {
+    const m = await api.me();
+    if (m.mode) appMode.value = m.mode;
+  } catch {
+    /* still load inventory */
+  }
   await refreshData();
   startHostPingLoop();
 }
@@ -670,6 +683,7 @@ async function openSettings() {
   try {
     const st = await api.getSettings();
     appSettings.value = st;
+    if (st.mode) appMode.value = st.mode;
     passwordForm.value = { current: "", next: "", confirm: "" };
     passwordErr.value = "";
     backupErr.value = "";
@@ -2398,9 +2412,10 @@ async function deleteIdentityRow(id: string) {
           <input v-model.number="settingsForm.display_height" type="number" class="w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
           <input v-model.number="settingsForm.display_color_depth" type="number" class="w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
         </div>
-        <template v-if="appSettings?.mode === 'desktop'">
+        <template v-if="appMode === 'desktop' || appSettings?.mode === 'desktop'">
           <label class="mt-3 block text-xs uppercase text-slate-500">Sync server URL</label>
           <input v-model="settingsForm.sync_url" placeholder="https://vantage.example" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+          <p class="mt-1 text-[11px] text-slate-500">Optional. Leave blank to use this app by itself. Set this to a vantaged URL only if you want inventory sync.</p>
           <label class="mt-3 block text-xs uppercase text-slate-500">Sync API key</label>
           <input v-model="settingsForm.sync_api_key" type="password" :placeholder="appSettings?.sync_api_key_set ? 'Set (leave blank to keep)' : 'Paste API key from vantaged'" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
         </template>

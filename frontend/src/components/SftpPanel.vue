@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { File, Folder } from "@lucide/vue";
-import { api, type SftpEntry } from "@/api";
+import { api, apiFetch, type SftpEntry } from "@/api";
 
 const props = defineProps<{
   kind?: "sftp" | "shared";
@@ -103,7 +103,7 @@ async function downloadFile(e: SftpEntry) {
       kind() === "shared"
         ? api.sharedDownloadUrl(props.hostId || "", p)
         : api.sftpDownloadUrl(props.connId || "", p);
-    const res = await fetch(url, { credentials: "include" });
+    const res = await apiFetch(url);
     if (!res.ok) throw new Error(await res.text());
     const blob = await res.blob();
     const href = URL.createObjectURL(blob);

@@ -6,7 +6,7 @@ import {
   watch,
   nextTick,
 } from "vue";
-import { api, type HostProtocol, type Settings } from "@/api";
+import { api, sessionToken, type HostProtocol, type Settings } from "@/api";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -105,7 +105,10 @@ function terminalTheme() {
 function wsUrl(hostId: string): string {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const path = isSSH() ? "/ws/terminal" : "/ws/guac";
-  return `${proto}//${location.host}${path}?host_id=${encodeURIComponent(hostId)}`;
+  const q = new URLSearchParams({ host_id: hostId });
+  const tok = sessionToken();
+  if (tok) q.set("token", tok);
+  return `${proto}//${location.host}${path}?${q.toString()}`;
 }
 
 function sendResize() {
@@ -426,8 +429,10 @@ function connectGuac() {
   attachGuacInput(displayEl);
   const { width, height } = guacViewport();
   try {
+    const tok = sessionToken();
+    const tokenQ = tok ? `&token=${encodeURIComponent(tok)}` : "";
     guacClient.connect(
-      `host_id=${encodeURIComponent(props.hostId)}&width=${width}&height=${height}`,
+      `host_id=${encodeURIComponent(props.hostId)}&width=${width}&height=${height}${tokenQ}`,
     );
   } catch (e) {
     status.value = e instanceof Error ? e.message : "Failed to connect";

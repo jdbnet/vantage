@@ -36,15 +36,23 @@ func NewJar(secret []byte, ttl time.Duration, secure bool) *Jar {
 	return &Jar{secret: secret, ttl: ttl, secure: secure}
 }
 
-func (j *Jar) Issue(w http.ResponseWriter, user string) error {
+func (j *Jar) mint(user string) (string, error) {
 	p := payload{User: user, Exp: time.Now().Add(j.ttl).Unix()}
 	raw, err := json.Marshal(p)
 	if err != nil {
-		return err
+		return "", err
 	}
 	mac := hmac.New(sha256.New, j.secret)
 	mac.Write(raw)
 	tok := base64.RawURLEncoding.EncodeToString(raw) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return tok, nil
+}
+
+func (j *Jar) Issue(w http.ResponseWriter, user string) (string, error) {
+	tok, err := j.mint(user)
+	if err != nil {
+		return "", err
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    tok,
@@ -54,7 +62,7 @@ func (j *Jar) Issue(w http.ResponseWriter, user string) error {
 		Secure:   j.secure,
 		MaxAge:   int(j.ttl.Seconds()),
 	})
-	return nil
+	return tok, nil
 }
 
 func (j *Jar) Clear(w http.ResponseWriter) {
@@ -63,12 +71,8 @@ func (j *Jar) Clear(w http.ResponseWriter) {
 	})
 }
 
-func (j *Jar) User(r *http.Request) (string, error) {
-	c, err := r.Cookie(CookieName)
-	if err != nil {
-		return "", err
-	}
-	parts := strings.Split(c.Value, ".")
+func (j *Jar) Parse(tok string) (string, error) {
+	parts := strings.Split(tok, ".")
 	if len(parts) != 2 {
 		return "", errors.New("bad session")
 	}
@@ -93,6 +97,14 @@ func (j *Jar) User(r *http.Request) (string, error) {
 		return "", errors.New("expired")
 	}
 	return p.User, nil
+}
+
+func (j *Jar) User(r *http.Request) (string, error) {
+	c, err := r.Cookie(CookieName)
+	if err != nil {
+		return "", err
+	}
+	return j.Parse(c.Value)
 }
 
 func RandomSecret() []byte {

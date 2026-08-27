@@ -154,14 +154,36 @@ type principal struct {
 	scopes  []string
 }
 
+func requestToken(r *http.Request) string {
+	if t := bearer(r); t != "" {
+		return t
+	}
+	if t := strings.TrimSpace(r.Header.Get("X-Vantage-Session")); t != "" {
+		return t
+	}
+	return r.URL.Query().Get("token")
+}
+
+func (s *Server) sessionUser(r *http.Request) (string, bool) {
+	if u, err := s.d.Jar.User(r); err == nil {
+		return u, true
+	}
+	tok := requestToken(r)
+	if tok == "" {
+		return "", false
+	}
+	u, err := s.d.Jar.Parse(tok)
+	if err != nil {
+		return "", false
+	}
+	return u, true
+}
+
 func (s *Server) resolveAuth(r *http.Request) *principal {
-	if _, err := s.d.Jar.User(r); err == nil {
+	if _, ok := s.sessionUser(r); ok {
 		return &principal{session: true}
 	}
-	token := bearer(r)
-	if token == "" {
-		token = r.URL.Query().Get("token")
-	}
+	token := requestToken(r)
 	if token == "" {
 		return nil
 	}
@@ -235,11 +257,12 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.d.Jar.Issue(w, strings.TrimSpace(body.Username)); err != nil {
+	tok, err := s.d.Jar.Issue(w, strings.TrimSpace(body.Username))
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session": tok})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -255,11 +278,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	if err := s.d.Jar.Issue(w, strings.TrimSpace(body.Username)); err != nil {
+	tok, err := s.d.Jar.Issue(w, strings.TrimSpace(body.Username))
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session": tok})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -269,10 +293,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	st, _ := s.d.Store.LoadSettings()
-	logged := false
-	if _, err := s.d.Jar.User(r); err == nil {
-		logged = true
-	}
+	_, logged := s.sessionUser(r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"logged_in":         logged,
 		"needs_setup":       s.d.NeedsSetup(),

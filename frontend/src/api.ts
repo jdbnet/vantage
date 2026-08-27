@@ -1,12 +1,59 @@
 const jsonHeaders = { "Content-Type": "application/json" };
+const SESSION_KEY = "vantage_session";
+
+export function sessionToken(): string {
+  try {
+    return localStorage.getItem(SESSION_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setSessionToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(SESSION_KEY, token);
+    else localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function authQuery(): string {
+  const t = sessionToken();
+  return t ? `token=${encodeURIComponent(t)}` : "";
+}
+
+function withAuthQuery(url: string): string {
+  const q = authQuery();
+  if (!q) return url;
+  return url + (url.includes("?") ? "&" : "?") + q;
+}
+
+export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const t = sessionToken();
+  if (t && !headers.has("Authorization")) {
+    headers.set("Authorization", "Bearer " + t);
+    headers.set("X-Vantage-Session", t);
+  }
+  return fetch(input, { ...init, credentials: "include", headers });
+}
+
+function authXhr(xhr: XMLHttpRequest): void {
+  const t = sessionToken();
+  if (t) {
+    xhr.setRequestHeader("Authorization", "Bearer " + t);
+    xhr.setRequestHeader("X-Vantage-Session", t);
+  }
+}
 
 async function handle<T>(res: Response): Promise<T> {
-  if (res.status === 401) {
-    throw new Error("unauthorized");
+  const data = (await res.json().catch(() => ({}))) as { error?: string; session?: string };
+  if (typeof data.session === "string" && data.session) {
+    setSessionToken(data.session);
   }
-  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error((data as { error?: string }).error || res.statusText);
+    throw new Error(data.error || res.statusText || "request failed");
   }
   return data as T;
 }
@@ -28,12 +75,12 @@ export const api = {
     audit_log_enabled?: boolean;
     mode?: string;
   }> {
-    const res = await fetch("/api/me", { credentials: "include" });
+    const res = await apiFetch("/api/me", { credentials: "include" });
     return handle(res);
   },
 
   async setup(username: string, password: string): Promise<void> {
-    const res = await fetch("/api/setup", {
+    const res = await apiFetch("/api/setup", {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -43,7 +90,7 @@ export const api = {
   },
 
   async login(username: string, password: string): Promise<void> {
-    const res = await fetch("/api/login", {
+    const res = await apiFetch("/api/login", {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -53,11 +100,15 @@ export const api = {
   },
 
   async logout(): Promise<void> {
-    const res = await fetch("/api/logout", {
-      method: "POST",
-      credentials: "include",
-    });
-    await handle(res);
+    try {
+      const res = await apiFetch("/api/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+      await handle(res);
+    } finally {
+      setSessionToken(null);
+    }
   },
 
   async browse(
@@ -69,20 +120,20 @@ export const api = {
     hosts: HostRow[];
     search_active: boolean;
   }> {
-    const res = await fetch(`/api/browse?${browseParams(folderId, q)}`, {
+    const res = await apiFetch(`/api/browse?${browseParams(folderId, q)}`, {
       credentials: "include",
     });
     return handle(res);
   },
 
   async listHosts(): Promise<HostRow[]> {
-    const res = await fetch("/api/hosts", { credentials: "include" });
+    const res = await apiFetch("/api/hosts", { credentials: "include" });
     const d = await handle<{ items: HostRow[] }>(res);
     return d.items;
   },
 
   async pingHost(id: string): Promise<{ up: boolean; via_jump?: boolean }> {
-    const res = await fetch(`/api/hosts/${id}/ping`, { credentials: "include" });
+    const res = await apiFetch(`/api/hosts/${id}/ping`, { credentials: "include" });
     return handle<{ up: boolean; via_jump?: boolean }>(res);
   },
 
@@ -90,7 +141,7 @@ export const api = {
     up: Record<string, boolean>;
     via_jump?: Record<string, boolean>;
   }> {
-    const res = await fetch("/api/hosts/ping", {
+    const res = await apiFetch("/api/hosts/ping", {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -100,13 +151,13 @@ export const api = {
   },
 
   async listTags(): Promise<string[]> {
-    const res = await fetch("/api/tags", { credentials: "include" });
+    const res = await apiFetch("/api/tags", { credentials: "include" });
     const d = await handle<{ items: string[] }>(res);
     return d.items;
   },
 
   async listFoldersFlat(): Promise<FolderRow[]> {
-    const res = await fetch("/api/folders", { credentials: "include" });
+    const res = await apiFetch("/api/folders", { credentials: "include" });
     const d = await handle<{ items: FolderRow[] }>(res);
     return d.items;
   },
@@ -115,7 +166,7 @@ export const api = {
     label: string;
     parent_id?: string | null;
   }): Promise<{ id: string }> {
-    const res = await fetch("/api/folders", {
+    const res = await apiFetch("/api/folders", {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -125,7 +176,7 @@ export const api = {
   },
 
   async deleteFolder(id: string): Promise<void> {
-    const res = await fetch(`/api/folders/${id}`, {
+    const res = await apiFetch(`/api/folders/${id}`, {
       method: "DELETE",
       credentials: "include",
     });
@@ -139,7 +190,7 @@ export const api = {
       parent_id?: string | null;
     },
   ): Promise<void> {
-    const res = await fetch(`/api/folders/${id}`, {
+    const res = await apiFetch(`/api/folders/${id}`, {
       method: "PATCH",
       credentials: "include",
       headers: jsonHeaders,
@@ -149,13 +200,13 @@ export const api = {
   },
 
   async listIdentities(): Promise<IdentityRow[]> {
-    const res = await fetch("/api/identities", { credentials: "include" });
+    const res = await apiFetch("/api/identities", { credentials: "include" });
     const d = await handle<{ items: IdentityRow[] }>(res);
     return d.items;
   },
 
   async createHost(body: Record<string, unknown>): Promise<{ id: string }> {
-    const res = await fetch("/api/hosts", {
+    const res = await apiFetch("/api/hosts", {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -165,7 +216,7 @@ export const api = {
   },
 
   async patchHost(id: string, body: Record<string, unknown>): Promise<void> {
-    const res = await fetch(`/api/hosts/${id}`, {
+    const res = await apiFetch(`/api/hosts/${id}`, {
       method: "PATCH",
       credentials: "include",
       headers: jsonHeaders,
@@ -175,7 +226,7 @@ export const api = {
   },
 
   async deleteHost(id: string): Promise<void> {
-    const res = await fetch(`/api/hosts/${id}`, {
+    const res = await apiFetch(`/api/hosts/${id}`, {
       method: "DELETE",
       credentials: "include",
     });
@@ -183,7 +234,7 @@ export const api = {
   },
 
   async createIdentity(body: Record<string, unknown>): Promise<{ id: string }> {
-    const res = await fetch("/api/identities", {
+    const res = await apiFetch("/api/identities", {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -203,7 +254,7 @@ export const api = {
       domain: string;
     }>,
   ): Promise<void> {
-    const res = await fetch(`/api/identities/${id}`, {
+    const res = await apiFetch(`/api/identities/${id}`, {
       method: "PATCH",
       credentials: "include",
       headers: jsonHeaders,
@@ -213,7 +264,7 @@ export const api = {
   },
 
   async deleteIdentity(id: string): Promise<void> {
-    const res = await fetch(`/api/identities/${id}`, {
+    const res = await apiFetch(`/api/identities/${id}`, {
       method: "DELETE",
       credentials: "include",
     });
@@ -221,13 +272,13 @@ export const api = {
   },
 
   async listSnippets(): Promise<SnippetRow[]> {
-    const res = await fetch("/api/snippets", { credentials: "include" });
+    const res = await apiFetch("/api/snippets", { credentials: "include" });
     const d = await handle<{ items: SnippetRow[] }>(res);
     return d.items;
   },
 
   async createSnippet(body: Record<string, unknown>): Promise<{ id: string }> {
-    const res = await fetch("/api/snippets", {
+    const res = await apiFetch("/api/snippets", {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -240,7 +291,7 @@ export const api = {
     id: string,
     body: Partial<{ label: string; command: string }>,
   ): Promise<void> {
-    const res = await fetch(`/api/snippets/${id}`, {
+    const res = await apiFetch(`/api/snippets/${id}`, {
       method: "PATCH",
       credentials: "include",
       headers: jsonHeaders,
@@ -250,7 +301,7 @@ export const api = {
   },
 
   async deleteSnippet(id: string): Promise<void> {
-    const res = await fetch(`/api/snippets/${id}`, {
+    const res = await apiFetch(`/api/snippets/${id}`, {
       method: "DELETE",
       credentials: "include",
     });
@@ -262,7 +313,7 @@ export const api = {
     if (daysBack !== undefined) {
       q.set("days_back", String(daysBack));
     }
-    const res = await fetch(`/api/audit/connections?${q.toString()}`, {
+    const res = await apiFetch(`/api/audit/connections?${q.toString()}`, {
       credentials: "include",
     });
     const d = await handle<{ items: ConnectionAuditRow[] }>(res);
@@ -270,13 +321,13 @@ export const api = {
   },
 
   async listApiKeyScopes(): Promise<ApiKeyScopeDef[]> {
-    const res = await fetch("/api/api-keys/scopes", { credentials: "include" });
+    const res = await apiFetch("/api/api-keys/scopes", { credentials: "include" });
     const d = await handle<{ items: ApiKeyScopeDef[] }>(res);
     return d.items;
   },
 
   async listApiKeys(): Promise<ApiKeyRow[]> {
-    const res = await fetch("/api/api-keys", { credentials: "include" });
+    const res = await apiFetch("/api/api-keys", { credentials: "include" });
     const d = await handle<{ items: ApiKeyRow[] }>(res);
     return d.items;
   },
@@ -286,7 +337,7 @@ export const api = {
     scopes: string[];
     expires_at?: string | null;
   }): Promise<CreateApiKeyResponse> {
-    const res = await fetch("/api/api-keys", {
+    const res = await apiFetch("/api/api-keys", {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -296,7 +347,7 @@ export const api = {
   },
 
   async deleteApiKey(id: string): Promise<void> {
-    const res = await fetch(`/api/api-keys/${id}`, {
+    const res = await apiFetch(`/api/api-keys/${id}`, {
       method: "DELETE",
       credentials: "include",
     });
@@ -304,12 +355,12 @@ export const api = {
   },
 
   async getSettings(): Promise<Settings> {
-    const res = await fetch("/api/settings", { credentials: "include" });
+    const res = await apiFetch("/api/settings", { credentials: "include" });
     return handle(res);
   },
 
   async patchSettings(body: Record<string, unknown>): Promise<Settings> {
-    const res = await fetch("/api/settings", {
+    const res = await apiFetch("/api/settings", {
       method: "PATCH",
       credentials: "include",
       headers: jsonHeaders,
@@ -319,7 +370,7 @@ export const api = {
   },
 
   async changePassword(current: string, next: string): Promise<void> {
-    const res = await fetch("/api/password", {
+    const res = await apiFetch("/api/password", {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -329,8 +380,7 @@ export const api = {
   },
 
   async exportInventory(): Promise<Blob> {
-    const res = await fetch("/api/export", { credentials: "include" });
-    if (res.status === 401) throw new Error("unauthorized");
+    const res = await apiFetch("/api/export", { credentials: "include" });
     if (!res.ok) {
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       throw new Error(data.error || res.statusText);
@@ -339,7 +389,7 @@ export const api = {
   },
 
   async importInventory(body: unknown): Promise<void> {
-    const res = await fetch("/api/import", {
+    const res = await apiFetch("/api/import", {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -349,7 +399,7 @@ export const api = {
   },
 
   async sftpList(connId: string, path: string): Promise<{ path: string; entries: SftpEntry[] }> {
-    const res = await fetch(`/api/sftp/${connId}/list`, {
+    const res = await apiFetch(`/api/sftp/${connId}/list`, {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -359,7 +409,7 @@ export const api = {
   },
 
   async sftpMkdir(connId: string, path: string): Promise<void> {
-    const res = await fetch(`/api/sftp/${connId}/mkdir`, {
+    const res = await apiFetch(`/api/sftp/${connId}/mkdir`, {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -369,7 +419,7 @@ export const api = {
   },
 
   async sftpRemove(connId: string, path: string): Promise<void> {
-    const res = await fetch(`/api/sftp/${connId}/remove`, {
+    const res = await apiFetch(`/api/sftp/${connId}/remove`, {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -379,7 +429,7 @@ export const api = {
   },
 
   async sftpRename(connId: string, oldPath: string, newPath: string): Promise<void> {
-    const res = await fetch(`/api/sftp/${connId}/rename`, {
+    const res = await apiFetch(`/api/sftp/${connId}/rename`, {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -401,6 +451,7 @@ export const api = {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `/api/sftp/${connId}/upload`);
       xhr.withCredentials = true;
+      authXhr(xhr);
       if (onProgress) {
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
@@ -409,7 +460,6 @@ export const api = {
         };
       }
       xhr.onload = () => {
-        if (xhr.status === 401) return reject(new Error("unauthorized"));
         let data: { error?: string } = {};
         try {
           data = JSON.parse(xhr.responseText);
@@ -429,11 +479,11 @@ export const api = {
 
   sftpDownloadUrl(connId: string, path: string): string {
     const q = new URLSearchParams({ path });
-    return `/api/sftp/${connId}/download?${q}`;
+    return withAuthQuery(`/api/sftp/${connId}/download?${q}`);
   },
 
   async sharedList(hostId: string, path: string): Promise<{ path: string; entries: SftpEntry[] }> {
-    const res = await fetch(`/api/shared/${hostId}/list`, {
+    const res = await apiFetch(`/api/shared/${hostId}/list`, {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -443,7 +493,7 @@ export const api = {
   },
 
   async sharedMkdir(hostId: string, path: string): Promise<void> {
-    const res = await fetch(`/api/shared/${hostId}/mkdir`, {
+    const res = await apiFetch(`/api/shared/${hostId}/mkdir`, {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -453,7 +503,7 @@ export const api = {
   },
 
   async sharedRemove(hostId: string, path: string): Promise<void> {
-    const res = await fetch(`/api/shared/${hostId}/remove`, {
+    const res = await apiFetch(`/api/shared/${hostId}/remove`, {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -463,7 +513,7 @@ export const api = {
   },
 
   async sharedRename(hostId: string, oldPath: string, newPath: string): Promise<void> {
-    const res = await fetch(`/api/shared/${hostId}/rename`, {
+    const res = await apiFetch(`/api/shared/${hostId}/rename`, {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
@@ -485,6 +535,7 @@ export const api = {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `/api/shared/${hostId}/upload`);
       xhr.withCredentials = true;
+      authXhr(xhr);
       if (onProgress) {
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
@@ -493,7 +544,6 @@ export const api = {
         };
       }
       xhr.onload = () => {
-        if (xhr.status === 401) return reject(new Error("unauthorized"));
         let data: { error?: string } = {};
         try {
           data = JSON.parse(xhr.responseText);
@@ -513,7 +563,7 @@ export const api = {
 
   sharedDownloadUrl(hostId: string, path: string): string {
     const q = new URLSearchParams({ path });
-    return `/api/shared/${hostId}/download?${q}`;
+    return withAuthQuery(`/api/shared/${hostId}/download?${q}`);
   },
 };
 
