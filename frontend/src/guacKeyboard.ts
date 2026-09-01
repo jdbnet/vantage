@@ -7,36 +7,38 @@ export type GuacKeySink = {
   keyup: (keysym: number) => void;
 };
 
-const sinks = new Set<GuacKeySink>();
-let keyboard: InstanceType<typeof Guacamole.Keyboard> | null = null;
+type Binding = {
+  keyboard: InstanceType<typeof Guacamole.Keyboard>;
+  sink: GuacKeySink;
+};
 
-function ensureKeyboard() {
-  if (keyboard) return;
-  keyboard = new Guacamole.Keyboard(document);
+const bindings = new Map<HTMLElement, Binding>();
+
+export function addGuacKeySink(el: HTMLElement, sink: GuacKeySink) {
+  removeGuacKeySink(el);
+  const keyboard = new Guacamole.Keyboard(el);
   keyboard.onkeydown = (keysym: number) => {
-    for (const s of sinks) {
-      if (s.isActive()) {
-        return s.keydown(keysym) === true;
-      }
-    }
-    return true;
+    if (!sink.isActive()) return true;
+    return sink.keydown(keysym) === true;
   };
   keyboard.onkeyup = (keysym: number) => {
-    for (const s of sinks) {
-      if (s.isActive()) {
-        s.keyup(keysym);
-        return true;
-      }
+    if (sink.isActive()) {
+      sink.keyup(keysym);
     }
     return true;
   };
+  bindings.set(el, { keyboard, sink });
 }
 
-export function addGuacKeySink(sink: GuacKeySink) {
-  ensureKeyboard();
-  sinks.add(sink);
-}
-
-export function removeGuacKeySink(sink: GuacKeySink) {
-  sinks.delete(sink);
+export function removeGuacKeySink(el: HTMLElement) {
+  const b = bindings.get(el);
+  if (!b) return;
+  b.keyboard.onkeydown = null;
+  b.keyboard.onkeyup = null;
+  try {
+    b.keyboard.reset();
+  } catch {
+    /* ignore */
+  }
+  bindings.delete(el);
 }

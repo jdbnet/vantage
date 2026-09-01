@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from "vue";
-import { Folder, Pencil, Trash2, Radio, ChevronDown, Settings } from "@lucide/vue";
+import { onMounted, onUnmounted, ref, watch, nextTick } from "vue";
+import { Folder, Pencil, Trash2, Radio, ChevronDown, Settings, SquareArrowOutUpRight } from "@lucide/vue";
 import {
   api,
   type HostRow,
@@ -19,6 +19,7 @@ import TabContent from "@/components/TabContent.vue";
 import TagInput from "@/components/TagInput.vue";
 import SnippetForm from "@/components/SnippetForm.vue";
 import { applyAccent, DEFAULT_ACCENT, normalizeAccent } from "@/theme";
+import { openPopout, type PopoutHandle } from "@/popout";
 
 interface TabItem {
   id: string;
@@ -45,6 +46,9 @@ const searchInput = ref<HTMLInputElement | null>(null);
 const tabs = ref<{ id: string; hostId: string; protocol: HostProtocol; label: string }[]>([]);
 const activePanes = ref<string[]>([]);
 const draggedTabId = ref<string | null>(null);
+const popouts = ref<Record<string, PopoutHandle>>({});
+const tabMenu = ref<{ id: string; x: number; y: number } | null>(null);
+const popoutErr = ref("");
 
 const broadcastMode = ref(false);
 const tabRefs = ref<Record<string, any>>({});
@@ -82,13 +86,16 @@ function closeSnippetsMenu(e: MouseEvent) {
 onMounted(() => {
   document.addEventListener("click", closeSnippetsMenu);
   document.addEventListener("keydown", onAppKeydown);
+  document.addEventListener("click", closeTabMenu);
 });
 
 onUnmounted(() => {
   document.removeEventListener("click", closeSnippetsMenu);
   document.removeEventListener("keydown", onAppKeydown);
+  document.removeEventListener("click", closeTabMenu);
   stopHostPingLoop();
   stopSyncStatusLoop();
+  closeAllPopouts();
 });
 
 async function loadSnippets() {
@@ -158,7 +165,7 @@ function onTabDragEnd() {
 }
 
 function onSplitDrop() {
-  if (!draggedTabId.value || activePanes.value.includes(draggedTabId.value)) {
+  if (!draggedTabId.value || activePanes.value.includes(draggedTabId.value) || popouts.value[draggedTabId.value]) {
     draggedTabId.value = null;
     return;
   }
@@ -171,6 +178,101 @@ function onSplitDrop() {
   }
   draggedTabId.value = null;
 }
+
+function isDesktop() {
+  return appMode.value === "desktop" || appSettings.value?.mode === "desktop";
+}
+
+function popoutTarget(id: string): HTMLElement | undefined {
+  return popouts.value[id]?.mount;
+}
+
+let tabMenuIgnoreClick = false;
+
+function closeTabMenu() {
+  if (tabMenuIgnoreClick) {
+    tabMenuIgnoreClick = false;
+    return;
+  }
+  tabMenu.value = null;
+}
+
+function onTabContext(e: MouseEvent, id: string) {
+  if (!isDesktop()) return;
+  e.preventDefault();
+  tabMenuIgnoreClick = true;
+  tabMenu.value = { id, x: e.clientX, y: e.clientY };
+}
+
+function closePopoutWindow(id: string) {
+  const h = popouts.value[id];
+  if (!h) return;
+  const next = { ...popouts.value };
+  delete next[id];
+  popouts.value = next;
+  try {
+    h.close();
+  } catch {
+    /* ignore */
+  }
+}
+
+function closeAllPopouts() {
+  for (const id of Object.keys(popouts.value)) {
+    closePopoutWindow(id);
+  }
+}
+
+function dockTab(id: string, closeWindow = true) {
+  closeTabMenu();
+  if (!popouts.value[id]) return;
+  if (closeWindow) {
+    closePopoutWindow(id);
+  } else {
+    const next = { ...popouts.value };
+    delete next[id];
+    popouts.value = next;
+  }
+  activePanes.value = [id];
+  void nextTick(() => {
+    tabRefs.value[id]?.relayout?.();
+  });
+}
+
+function popOutTab(id: string) {
+  closeTabMenu();
+  popoutErr.value = "";
+  if (!isDesktop() || popouts.value[id]) return;
+  const tab = tabs.value.find((t) => t.id === id);
+  if (!tab) return;
+  const handle = openPopout({
+    name: "vantage-popout-" + id,
+    title: "Vantage - " + tab.label,
+    onClose: () => dockTab(id, false),
+  });
+  if (!handle) {
+    popoutErr.value = "Could not open a pop-out window. Pop-ups may be blocked.";
+    return;
+  }
+  popouts.value = { ...popouts.value, [id]: handle };
+  activePanes.value = activePanes.value.filter((p) => p !== id);
+  if (activePanes.value.length === 0) {
+    const other = tabs.value.find((t) => t.id !== id && !popouts.value[t.id]);
+    if (other) activePanes.value = [other.id];
+  }
+  void nextTick(() => {
+    tabRefs.value[id]?.relayout?.();
+  });
+}
+
+function onTabClick(id: string) {
+  if (popouts.value[id]) {
+    dockTab(id);
+    return;
+  }
+  activePanes.value = [id];
+}
+
 const loadErr = ref("");
 const HOST_SORT_KEY = "vantage_host_sort";
 
@@ -576,6 +678,7 @@ async function onLoggedIn() {
 
 async function logout() {
   await api.logout();
+    closeAllPopouts();
     tabs.value = [];
     activePanes.value = [];
     allHosts.value = [];
@@ -985,6 +1088,7 @@ function toggleSidebar() {
 }
 
 function closeTab(id: string) {
+  closePopoutWindow(id);
   tabs.value = tabs.value.filter((t) => t.id !== id);
   activePanes.value = activePanes.value.filter((p) => p !== id);
   if (activePanes.value.length === 0 && tabs.value.length) {
@@ -1233,6 +1337,9 @@ async function deleteHostRow(id: string) {
   if (!confirm("Remove this host entry?")) return;
   await api.deleteHost(id);
   allHosts.value = allHosts.value.filter((h) => h.id !== id);
+  for (const t of tabs.value.filter((tab) => tab.hostId === id)) {
+    closePopoutWindow(t.id);
+  }
   tabs.value = tabs.value.filter((t) => t.hostId !== id);
   activePanes.value = activePanes.value.filter(p => tabs.value.some(t => t.id === p));
   if (activePanes.value.length === 0 && tabs.value.length) {
@@ -1621,6 +1728,7 @@ async function deleteIdentityRow(id: string) {
           Select a host to open a tab, or add one from the sidebar.
         </div>
         <template v-else>
+          <p v-if="popoutErr" class="shrink-0 px-3 py-1 text-xs text-red-400">{{ popoutErr }}</p>
           <div
             class="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-800 bg-surface-raised px-2 pt-2"
           >
@@ -1635,13 +1743,17 @@ async function deleteIdentityRow(id: string) {
               @dragend="onTabDragEnd"
               class="flex items-center gap-2 rounded-t-lg border border-b-0 px-3 py-2 text-sm transition-colors"
               :class="[
-                activePanes.includes(t.id)
-                  ? 'border-slate-700 bg-surface text-white'
-                  : 'border-transparent bg-transparent text-slate-400 hover:text-white',
+                popouts[t.id]
+                  ? 'border-slate-700/80 bg-slate-900 text-slate-300'
+                  : activePanes.includes(t.id)
+                    ? 'border-slate-700 bg-surface text-white'
+                    : 'border-transparent bg-transparent text-slate-400 hover:text-white',
                 draggedTabId && draggedTabId !== t.id ? 'hover:bg-slate-800/50' : ''
               ]"
-              @click="activePanes = [t.id]"
+              @click="onTabClick(t.id)"
+              @contextmenu="onTabContext($event, t.id)"
             >
+              <SquareArrowOutUpRight v-if="popouts[t.id]" class="h-3 w-3 shrink-0 text-slate-500" />
               {{ t.label }}
               <span
                 class="rounded px-1 text-slate-500 hover:bg-slate-800 hover:text-white"
@@ -1649,22 +1761,48 @@ async function deleteIdentityRow(id: string) {
               >×</span>
             </button>
           </div>
+          <div
+            v-if="tabMenu"
+            class="fixed z-[80] min-w-[9rem] rounded-lg border border-slate-700 bg-surface-raised py-1 text-sm shadow-xl"
+            :style="{ left: tabMenu.x + 'px', top: tabMenu.y + 'px' }"
+            @click.stop
+          >
+            <button
+              v-if="!popouts[tabMenu.id]"
+              type="button"
+              class="block w-full px-3 py-1.5 text-left text-slate-200 hover:bg-slate-800"
+              @click="popOutTab(tabMenu.id)"
+            >
+              Pop out
+            </button>
+            <button
+              v-else
+              type="button"
+              class="block w-full px-3 py-1.5 text-left text-slate-200 hover:bg-slate-800"
+              @click="dockTab(tabMenu.id)"
+            >
+              Pop in
+            </button>
+          </div>
           <div class="relative min-h-0 flex-1 flex flex-row gap-2 p-2 md:p-3">
             <div
               v-for="t in tabs"
-              v-show="activePanes.includes(t.id)"
+              v-show="activePanes.includes(t.id) && !popouts[t.id]"
               :key="t.id"
               class="flex-1 min-w-0 h-full"
             >
-              <TabContent
-                :ref="(el) => setTabRef(el, t.id)"
-                :host-id="t.hostId"
-                :protocol="t.protocol || 'ssh'"
-                :visible="activePanes.includes(t.id)"
-                :show-sftp="showSftpPanel"
-                :settings="appSettings"
-                @broadcast-data="(data: string) => handleBroadcast(data, t.id)"
-              />
+              <Teleport :disabled="!popoutTarget(t.id)" :to="popoutTarget(t.id) || 'body'">
+                <TabContent
+                  :ref="(el) => setTabRef(el, t.id)"
+                  :host-id="t.hostId"
+                  :protocol="t.protocol || 'ssh'"
+                  :visible="activePanes.includes(t.id) || !!popouts[t.id]"
+                  :show-sftp="showSftpPanel && activePanes.includes(t.id) && !popouts[t.id]"
+                  :popped-out="!!popouts[t.id]"
+                  :settings="appSettings"
+                  @broadcast-data="(data: string) => handleBroadcast(data, t.id)"
+                />
+              </Teleport>
             </div>
             
             <div 

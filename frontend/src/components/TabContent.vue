@@ -24,6 +24,7 @@ const props = defineProps<{
   protocol: HostProtocol;
   visible: boolean;
   showSftp: boolean;
+  poppedOut?: boolean;
   settings: Settings | null;
 }>();
 
@@ -38,6 +39,7 @@ defineExpose({
     }
   },
   reconnect,
+  relayout,
 });
 
 type HostKeyPrompt = {
@@ -68,12 +70,15 @@ let fit: FitAddon | null = null;
 let searchAddon: SearchAddon | null = null;
 let ro: ResizeObserver | null = null;
 let visibilityHandler: (() => void) | null = null;
+let visibilityDoc: Document | null = null;
 let pingInterval: number | null = null;
 let guacClient: InstanceType<typeof Guacamole.Client> | null = null;
 let guacKeySink: GuacKeySink | null = null;
 let guacPasteHandler: ((ev: ClipboardEvent) => void) | null = null;
 let guacFocusHandler: ((ev: Event) => void) | null = null;
 let guacOutsideClick: ((ev: MouseEvent) => void) | null = null;
+let guacPasteDoc: Document | null = null;
+let guacOutsideDoc: Document | null = null;
 let guacInputActive = false;
 let guacResizeTimer: number | null = null;
 let lastGuacRemoteW = 0;
@@ -353,6 +358,14 @@ function scheduleGuacRemoteResize() {
   }, 200);
 }
 
+function sessionDoc(): Document {
+  return guacEl.value?.ownerDocument || sessionPane.value?.ownerDocument || document;
+}
+
+function sessionWin(): Window {
+  return sessionDoc().defaultView || window;
+}
+
 function guacDisplayFocused(): boolean {
   return guacInputActive && props.visible;
 }
@@ -424,7 +437,7 @@ function finishGuacPaste(text: string, keysym: number) {
   if (text && text.length <= CLIPBOARD_MAX) {
     sendGuacClipboard(text);
   }
-  window.setTimeout(() => {
+  sessionWin().setTimeout(() => {
     sendGuacVKey(keysym);
     guacEl.value?.focus({ preventScroll: true });
   }, 30);
@@ -462,29 +475,105 @@ function onGuacPaste(ev: ClipboardEvent) {
 
 function disposeGuacInput() {
   const wrap = guacEl.value;
-  if (guacKeySink) {
-    removeGuacKeySink(guacKeySink);
-    guacKeySink = null;
+  if (wrap) {
+    removeGuacKeySink(wrap);
   }
+  guacKeySink = null;
   if (guacPasteHandler) {
-    document.removeEventListener("paste", guacPasteHandler, true);
+    guacPasteDoc?.removeEventListener("paste", guacPasteHandler, true);
     wrap?.removeEventListener("paste", guacPasteHandler);
   }
   guacPasteHandler = null;
+  guacPasteDoc = null;
   if (guacFocusHandler && wrap) {
     wrap.removeEventListener("mousedown", guacFocusHandler);
   }
   guacFocusHandler = null;
   if (guacOutsideClick) {
-    document.removeEventListener("mousedown", guacOutsideClick, true);
+    guacOutsideDoc?.removeEventListener("mousedown", guacOutsideClick, true);
     guacOutsideClick = null;
   }
+  guacOutsideDoc = null;
   clearGuacPasteFallback();
   guacPastePending = false;
   guacCtrlDown = false;
   guacMetaDown = false;
-  lastPushedClipboard = "";
   guacInputActive = false;
+}
+
+function bindGuacDocEvents() {
+  const wrap = guacEl.value;
+  if (!wrap) return;
+  const doc = sessionDoc();
+  if (guacPasteHandler && guacPasteDoc) {
+    guacPasteDoc.removeEventListener("paste", guacPasteHandler, true);
+  }
+  if (guacOutsideClick && guacOutsideDoc) {
+    guacOutsideDoc.removeEventListener("mousedown", guacOutsideClick, true);
+  }
+  if (!guacPasteHandler) {
+    guacPasteHandler = onGuacPaste;
+  }
+  guacPasteDoc = doc;
+  doc.addEventListener("paste", guacPasteHandler, true);
+  wrap.removeEventListener("paste", guacPasteHandler);
+  wrap.addEventListener("paste", guacPasteHandler);
+  guacOutsideClick = (ev: MouseEvent) => {
+    if (!wrap.contains(ev.target as Node) && ev.target !== guacClipboardEl.value) {
+      guacInputActive = false;
+    }
+  };
+  guacOutsideDoc = doc;
+  doc.addEventListener("mousedown", guacOutsideClick, true);
+}
+
+function observeSessionSize() {
+  ro?.disconnect();
+  ro = null;
+  if (isSSH()) {
+    if (!termEl.value) return;
+    ro = new ResizeObserver(() => fitAndResize());
+    ro.observe(termEl.value);
+    return;
+  }
+  if (!guacEl.value) return;
+  ro = new ResizeObserver(() => {
+    if (!props.visible) return;
+    fitGuacDisplay();
+    scheduleGuacRemoteResize();
+  });
+  ro.observe(guacEl.value);
+}
+
+function bindVisibility() {
+  if (visibilityHandler && visibilityDoc) {
+    visibilityDoc.removeEventListener("visibilitychange", visibilityHandler);
+  }
+  visibilityHandler = () => {
+    if (sessionDoc().visibilityState === "visible") {
+      sendPing();
+      fitAndResize();
+      fitGuacDisplay();
+    }
+  };
+  visibilityDoc = sessionDoc();
+  visibilityDoc.addEventListener("visibilitychange", visibilityHandler);
+}
+
+async function relayout() {
+  await nextTick();
+  observeSessionSize();
+  if (!isSSH()) {
+    bindGuacDocEvents();
+  }
+  bindVisibility();
+  fitAndResize();
+  fitGuacDisplay();
+  scheduleGuacRemoteResize();
+  term?.focus();
+  if (!isSSH()) {
+    guacEl.value?.focus({ preventScroll: true });
+  }
 }
 
 function attachGuacInput(displayEl: HTMLElement) {
@@ -495,17 +584,10 @@ function attachGuacInput(displayEl: HTMLElement) {
     guacFocusHandler = () => armGuacInput();
     wrap.addEventListener("mousedown", guacFocusHandler);
   }
-  if (!guacOutsideClick) {
-    guacOutsideClick = (ev: MouseEvent) => {
-      if (!wrap.contains(ev.target as Node) && ev.target !== guacClipboardEl.value) {
-        guacInputActive = false;
-      }
-    };
-    document.addEventListener("mousedown", guacOutsideClick, true);
-  }
   if (!guacKeySink) {
     guacKeySink = {
-      isActive: () => guacDisplayFocused() && !isEditableTarget(document.activeElement),
+      isActive: () =>
+        guacDisplayFocused() && !isEditableTarget(sessionDoc().activeElement),
       keydown: (keysym: number) => {
         if (isGuacCtrl(keysym)) {
           guacCtrlDown = true;
@@ -533,12 +615,9 @@ function attachGuacInput(displayEl: HTMLElement) {
         guacClient?.sendKeyEvent(0, keysym);
       },
     };
-    addGuacKeySink(guacKeySink);
+    addGuacKeySink(wrap, guacKeySink);
   }
-  if (!guacPasteHandler) {
-    guacPasteHandler = onGuacPaste;
-    document.addEventListener("paste", guacPasteHandler, true);
-  }
+  bindGuacDocEvents();
   if (guacClient) {
     guacClient.onclipboard = (stream: unknown, mimetype: string) => {
       if (!mimetype || !mimetype.startsWith("text/")) return;
@@ -550,7 +629,8 @@ function attachGuacInput(displayEl: HTMLElement) {
       reader.onend = () => {
         if (!text || text.length > CLIPBOARD_MAX) return;
         lastPushedClipboard = text;
-        void navigator.clipboard.writeText(text).catch(() => {
+        const clip = sessionWin().navigator.clipboard;
+        void clip?.writeText(text).catch(() => {
           /* ignore */
         });
       };
@@ -705,30 +785,15 @@ onMounted(async () => {
       }
     });
 
-    ro = new ResizeObserver(() => fitAndResize());
-    ro.observe(termEl.value);
+    observeSessionSize();
     connectSsh();
   } else {
     await nextTick();
     connectGuac();
-    if (guacEl.value) {
-      ro = new ResizeObserver(() => {
-        if (!props.visible) return;
-        fitGuacDisplay();
-        scheduleGuacRemoteResize();
-      });
-      ro.observe(guacEl.value);
-    }
+    observeSessionSize();
   }
 
-  visibilityHandler = () => {
-    if (document.visibilityState === "visible") {
-      sendPing();
-      fitAndResize();
-      fitGuacDisplay();
-    }
-  };
-  document.addEventListener("visibilitychange", visibilityHandler);
+  bindVisibility();
   fullscreenHandler = onFullscreenChange;
   document.addEventListener("fullscreenchange", fullscreenHandler);
 });
@@ -740,9 +805,10 @@ onUnmounted(() => {
     window.clearTimeout(guacResizeTimer);
     guacResizeTimer = null;
   }
-  if (visibilityHandler) {
-    document.removeEventListener("visibilitychange", visibilityHandler);
+  if (visibilityHandler && visibilityDoc) {
+    visibilityDoc.removeEventListener("visibilitychange", visibilityHandler);
     visibilityHandler = null;
+    visibilityDoc = null;
   }
   if (fullscreenHandler) {
     document.removeEventListener("fullscreenchange", fullscreenHandler);
@@ -783,10 +849,17 @@ watch(
     }
   },
 );
+
+watch(
+  () => props.poppedOut,
+  async () => {
+    await relayout();
+  },
+);
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 gap-0">
+  <div class="flex h-full min-h-0 w-full gap-0" :class="poppedOut ? 'min-h-full' : ''">
     <div ref="sessionPane" class="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-surface">
       <div
         v-if="status"
@@ -795,6 +868,7 @@ watch(
         {{ status }}
       </div>
       <button
+        v-if="!poppedOut"
         type="button"
         class="absolute right-3 top-2 z-10 rounded bg-black/70 p-1.5 text-slate-300 hover:bg-black/80 hover:text-white"
         :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
