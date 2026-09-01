@@ -438,6 +438,9 @@ func (s *Server) handleSyncSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	if tags, err := s.d.Store.ListTagRecords(); err == nil {
+		snap["tags"] = tags
+	}
 	s.rewriteSnapshotSecrets(snap, true)
 	writeJSON(w, 200, snap)
 }
@@ -464,11 +467,11 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid json")
 		return
 	}
-	for _, op := range body.Ops {
-		op = s.rewriteOpSecrets(op, false)
-		if err := s.d.Store.ApplyRemoteOp(op); err != nil {
-			log.Printf("apply op: %v", err)
-		}
+	for i := range body.Ops {
+		body.Ops[i] = s.rewriteOpSecrets(body.Ops[i], false)
+	}
+	if err := s.d.Store.ApplyRemoteOps(body.Ops); err != nil {
+		log.Printf("apply ops: %v", err)
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
@@ -507,9 +510,11 @@ func (s *Server) handleSyncWS(w http.ResponseWriter, r *http.Request) {
 			_ = conn.WriteJSON(map[string]any{"type": "ops", "ops": rewritten, "head": head})
 			last = head
 		case "push":
-			for _, op := range msg.Ops {
-				op = s.rewriteOpSecrets(op, false)
-				_ = s.d.Store.ApplyRemoteOp(op)
+			for i := range msg.Ops {
+				msg.Ops[i] = s.rewriteOpSecrets(msg.Ops[i], false)
+			}
+			if err := s.d.Store.ApplyRemoteOps(msg.Ops); err != nil {
+				log.Printf("apply ops: %v", err)
 			}
 			_ = conn.WriteJSON(map[string]any{"type": "ack"})
 		case "poll":

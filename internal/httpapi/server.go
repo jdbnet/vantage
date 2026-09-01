@@ -106,6 +106,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("PUT /api/sync/files/content", s.auth("sync", s.handleSyncFilePut))
 	mux.HandleFunc("DELETE /api/sync/files/content", s.auth("sync", s.handleSyncFileDelete))
 	mux.HandleFunc("GET /api/sync/changes", s.auth("sync", s.handleSyncChanges))
+	mux.HandleFunc("GET /api/sync/snapshot", s.auth("sync", s.handleSyncSnapshot))
 	mux.HandleFunc("POST /api/sync/push", s.auth("sync", s.handleSyncPush))
 	mux.HandleFunc("GET /api/sync/status", s.auth("", s.handleSyncStatus))
 	mux.HandleFunc("POST /api/sync/resync", s.auth("", s.handleSyncResync))

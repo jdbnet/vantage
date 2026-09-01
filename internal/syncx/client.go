@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -46,18 +47,21 @@ type Client struct {
 	lastError     string
 	lastErrorAt   time.Time
 
+	needSnapshot bool
+
 	wsMu sync.Mutex
 	ws   *websocket.Conn
 }
 
 func StartClient(st *store.Store, boxFn func() *cryptox.Box, dataDir string) *Client {
 	c := &Client{
-		st:       st,
-		boxFn:    boxFn,
-		dataDir:  dataDir,
-		stop:     make(chan struct{}),
-		kick:     make(chan struct{}, 1),
-		fileKick: make(chan struct{}, 1),
+		st:           st,
+		boxFn:        boxFn,
+		dataDir:      dataDir,
+		stop:         make(chan struct{}),
+		kick:         make(chan struct{}, 1),
+		fileKick:     make(chan struct{}, 1),
+		needSnapshot: true,
 	}
 	go c.loop()
 	go c.fileLoop()
@@ -79,6 +83,7 @@ func (c *Client) Stop() {
 func (c *Client) Kick() {
 	c.mu.Lock()
 	c.lastPush = 0
+	c.needSnapshot = true
 	c.mu.Unlock()
 	c.closeWS()
 	select {
@@ -162,6 +167,7 @@ func (c *Client) pushPull() {
 	base := strings.TrimRight(settings.SyncURL, "/")
 	c.mu.Lock()
 	lastPush := c.lastPush
+	wantSnapshot := c.needSnapshot
 	c.mu.Unlock()
 	if err := pushLocal(c.st, box, base, key, &lastPush); err != nil {
 		c.setError(err)
@@ -169,6 +175,17 @@ func (c *Client) pushPull() {
 	} else {
 		c.mu.Lock()
 		c.lastPush = lastPush
+		c.mu.Unlock()
+	}
+	if wantSnapshot {
+		if err := pullSnapshot(c.st, box, base, key); err != nil {
+			if !isHTTPStatus(err, 404) {
+				c.setError(fmt.Errorf("sync snapshot: %w", err))
+				log.Printf("sync snapshot: %v", err)
+			}
+		}
+		c.mu.Lock()
+		c.needSnapshot = false
 		c.mu.Unlock()
 	}
 	if err := pullRemote(c.st, box, base, key); err != nil {
@@ -301,13 +318,126 @@ func pullRemote(st *store.Store, box *cryptox.Box, base, key string) error {
 }
 
 func applyPulledOps(st *store.Store, box *cryptox.Box, ops []model.ChangeOp) error {
+	out := make([]model.ChangeOp, 0, len(ops))
 	for _, op := range ops {
-		op = rewriteOp(box, op, false)
-		if err := st.ApplyRemoteOp(op); err != nil {
-			return err
+		out = append(out, rewriteOp(box, op, false))
+	}
+	return st.ApplyRemoteOps(out)
+}
+
+func pullSnapshot(st *store.Store, box *cryptox.Box, base, key string) error {
+	req, err := http.NewRequest(http.MethodGet, base+"/api/sync/snapshot", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return httpStatusError("snapshot", resp.StatusCode)
+	}
+	var snap map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return err
+	}
+	return applyPulledOps(st, box, snapshotOps(snap))
+}
+
+func snapshotOps(snap map[string]any) []model.ChangeOp {
+	var ops []model.ChangeOp
+	folders := asMapSlice(snap["folders"])
+	sort.SliceStable(folders, func(i, j int) bool {
+		return folderDepth(folders[i], folders) < folderDepth(folders[j], folders)
+	})
+	for _, m := range folders {
+		ops = append(ops, snapshotOp("folder", m))
+	}
+	for _, m := range asMapSlice(snap["identities"]) {
+		ops = append(ops, snapshotOp("identity", m))
+	}
+	for _, m := range asMapSlice(snap["tags"]) {
+		ops = append(ops, snapshotOp("tag", m))
+	}
+	for _, m := range asMapSlice(snap["hosts"]) {
+		ops = append(ops, snapshotOp("host", m))
+	}
+	for _, m := range asMapSlice(snap["snippets"]) {
+		ops = append(ops, snapshotOp("snippet", m))
+	}
+	for _, m := range asMapSlice(snap["known_hosts"]) {
+		ops = append(ops, snapshotOp("known_host", m))
+	}
+	return ops
+}
+
+func snapshotOp(entity string, m map[string]any) model.ChangeOp {
+	raw, _ := json.Marshal(m)
+	id := fmt.Sprint(m["id"])
+	updated, _ := m["updated_at"].(string)
+	return model.ChangeOp{
+		Entity:    entity,
+		EntityID:  id,
+		Op:        "upsert",
+		UpdatedAt: updated,
+		Origin:    "snapshot",
+		Payload:   raw,
+	}
+}
+
+func asMapSlice(v any) []map[string]any {
+	switch t := v.(type) {
+	case []map[string]any:
+		return t
+	case []any:
+		out := make([]map[string]any, 0, len(t))
+		for _, item := range t {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func folderDepth(f map[string]any, all []map[string]any) int {
+	byID := map[string]map[string]any{}
+	for _, x := range all {
+		if id, ok := x["id"]; ok {
+			byID[fmt.Sprint(id)] = x
 		}
 	}
-	return nil
+	depth := 0
+	cur, _ := f["parent_id"]
+	seen := map[string]struct{}{}
+	for cur != nil {
+		id := fmt.Sprint(cur)
+		if id == "" || id == "<nil>" {
+			break
+		}
+		if _, ok := seen[id]; ok {
+			break
+		}
+		seen[id] = struct{}{}
+		parent, ok := byID[id]
+		if !ok {
+			break
+		}
+		depth++
+		cur = parent["parent_id"]
+	}
+	return depth
+}
+
+func isHTTPStatus(err error, status int) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", status))
 }
 
 func (c *Client) connectWS() {

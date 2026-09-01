@@ -54,6 +54,10 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	s.replicaID = id
+	if err := s.BackfillChangeLog(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -156,6 +160,9 @@ func newer(a, b string) bool {
 }
 
 func (s *Store) ChangesSince(seq int64) ([]model.ChangeOp, int64, error) {
+	if err := s.BackfillChangeLog(); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.db.Query(
 		`SELECT seq, entity, entity_id, op, row_updated_at, origin_replica_id, payload FROM change_log WHERE seq > ? ORDER BY seq`,
 		seq,

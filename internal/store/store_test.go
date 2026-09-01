@@ -242,6 +242,112 @@ func TestChangeLogAndLWW(t *testing.T) {
 	}
 }
 
+func TestApplyRemoteOpsHostBeforeFolder(t *testing.T) {
+	dir := t.TempDir()
+	a, err := Open(filepath.Join(dir, "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Open(filepath.Join(dir, "b.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+
+	fid, err := a.CreateFolder("prod", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hid, err := a.CreateHost(HostWrite{
+		FolderID: &fid,
+		Label:    "db1",
+		Hostname: "10.0.0.1",
+		Port:     22,
+		Protocol: "ssh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops, _, err := a.ChangesSince(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reversed []model.ChangeOp
+	for i := len(ops) - 1; i >= 0; i-- {
+		reversed = append(reversed, ops[i])
+	}
+	if err := b.ApplyRemoteOps(reversed); err != nil {
+		t.Fatal(err)
+	}
+	folders, err := b.ListFolders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].ID != fid {
+		t.Fatalf("folders %+v", folders)
+	}
+	h, err := b.GetHost(hid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.FolderID == nil || *h.FolderID != fid {
+		t.Fatalf("host folder %+v", h.FolderID)
+	}
+}
+
+func TestBackfillChangeLogFolders(t *testing.T) {
+	dir := t.TempDir()
+	a, err := Open(filepath.Join(dir, "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	ts := now()
+	fid := "01folderbackfill0000000000"
+	_, err = a.DB().Exec(
+		`INSERT INTO folders(id, parent_id, label, created_at, updated_at) VALUES(?,?,?,?,?)`,
+		fid, nil, "orphaned", ts, ts,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.BackfillChangeLog(); err != nil {
+		t.Fatal(err)
+	}
+	ops, _, err := a.ChangesSince(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, op := range ops {
+		if op.Entity == "folder" && op.EntityID == fid {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected backfilled folder op, got %+v", ops)
+	}
+
+	b, err := Open(filepath.Join(dir, "b.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err := b.ApplyRemoteOps(ops); err != nil {
+		t.Fatal(err)
+	}
+	folders, err := b.ListFolders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].Label != "orphaned" {
+		t.Fatalf("folders %+v", folders)
+	}
+}
+
 func TestNormalizeAccentColor(t *testing.T) {
 	got, ok := NormalizeAccentColor("#1EBE8A")
 	if !ok || got != "#1ebe8a" {

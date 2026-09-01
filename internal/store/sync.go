@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jdbnet/vantage/internal/model"
@@ -55,6 +56,244 @@ func (s *Store) ApplyRemoteOp(op model.ChangeOp) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) ApplyRemoteOps(ops []model.ChangeOp) error {
+	pending := append([]model.ChangeOp(nil), ops...)
+	var last error
+	for pass := 0; pass < 8 && len(pending) > 0; pass++ {
+		var failed []model.ChangeOp
+		progressed := false
+		for _, op := range pending {
+			if err := s.ApplyRemoteOp(op); err != nil {
+				last = err
+				failed = append(failed, op)
+				continue
+			}
+			progressed = true
+		}
+		pending = failed
+		if !progressed {
+			break
+		}
+	}
+	if len(pending) > 0 {
+		return fmt.Errorf("apply %d ops failed: %w", len(pending), last)
+	}
+	return nil
+}
+
+func (s *Store) BackfillChangeLog() error {
+	missing, err := s.missingChangeLogCount()
+	if err != nil {
+		return err
+	}
+	if missing == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	folders, err := s.ListFolders()
+	if err != nil {
+		return err
+	}
+	sortFolderRecordsParentsFirst(folders)
+	for _, f := range folders {
+		ok, err := changeLogHasTx(tx, "folder", f.ID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		ts := coalesce(f.UpdatedAt, now())
+		payload := map[string]any{
+			"id": f.ID, "parent_id": f.ParentID, "label": f.Label,
+			"created_at": f.CreatedAt, "updated_at": ts,
+		}
+		if err := s.appendLog(tx, "folder", f.ID, "upsert", ts, payload); err != nil {
+			return err
+		}
+	}
+
+	idents, err := s.ListIdentities()
+	if err != nil {
+		return err
+	}
+	for _, i := range idents {
+		ok, err := changeLogHasTx(tx, "identity", i.ID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		rec, err := s.GetIdentity(i.ID)
+		if err != nil {
+			continue
+		}
+		ts := coalesce(i.UpdatedAt, now())
+		payload := map[string]any{
+			"id": i.ID, "label": i.Label, "auth_type": i.AuthType,
+			"encrypted_blob": rec.Blob, "encrypted_key_passphrase": rec.Passphrase,
+			"created_at": i.CreatedAt, "updated_at": ts,
+		}
+		if err := s.appendLog(tx, "identity", i.ID, "upsert", ts, payload); err != nil {
+			return err
+		}
+	}
+
+	tags, err := s.ListTagRecords()
+	if err != nil {
+		return err
+	}
+	for _, t := range tags {
+		ok, err := changeLogHasTx(tx, "tag", t.ID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		ts := coalesce(t.UpdatedAt, now())
+		payload := map[string]any{
+			"id": t.ID, "name": t.Name, "created_at": t.CreatedAt, "updated_at": ts,
+		}
+		if err := s.appendLog(tx, "tag", t.ID, "upsert", ts, payload); err != nil {
+			return err
+		}
+	}
+
+	hosts, err := s.ListHosts()
+	if err != nil {
+		return err
+	}
+	for _, h := range hosts {
+		ok, err := changeLogHasTx(tx, "host", h.ID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		rec, err := s.GetHostRecord(h.ID)
+		if err != nil {
+			continue
+		}
+		ts := coalesce(h.UpdatedAt, now())
+		payload := map[string]any{
+			"id": h.ID, "folder_id": h.FolderID, "label": h.Label, "hostname": h.Hostname, "port": h.Port,
+			"protocol": h.Protocol, "identity_id": h.IdentityID, "jump_host_id": h.JumpHostID,
+			"inline_identity_auth_type": rec.InlineAuthType, "inline_identity_encrypted_blob": rec.InlineBlob,
+			"inline_identity_encrypted_key_passphrase": rec.InlinePassphrase, "tags": h.Tags,
+			"created_at": h.CreatedAt, "updated_at": ts,
+		}
+		if err := s.appendLog(tx, "host", h.ID, "upsert", ts, payload); err != nil {
+			return err
+		}
+	}
+
+	snips, err := s.ListSnippets()
+	if err != nil {
+		return err
+	}
+	for _, sn := range snips {
+		ok, err := changeLogHasTx(tx, "snippet", sn.ID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		ts := coalesce(sn.UpdatedAt, now())
+		payload := map[string]any{
+			"id": sn.ID, "label": sn.Label, "command": sn.Command,
+			"created_at": sn.CreatedAt, "updated_at": ts,
+		}
+		if err := s.appendLog(tx, "snippet", sn.ID, "upsert", ts, payload); err != nil {
+			return err
+		}
+	}
+
+	known, err := s.ListKnownHosts()
+	if err != nil {
+		return err
+	}
+	for _, k := range known {
+		ok, err := changeLogHasTx(tx, "known_host", k.ID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		ts := coalesce(k.UpdatedAt, now())
+		payload := map[string]any{
+			"id": k.ID, "hostname": k.Hostname, "port": k.Port, "key_type": k.KeyType,
+			"fingerprint": k.Fingerprint, "public_key": k.PublicKey,
+			"created_at": k.CreatedAt, "updated_at": ts,
+		}
+		if err := s.appendLog(tx, "known_host", k.ID, "upsert", ts, payload); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func changeLogHasTx(tx *sql.Tx, entity, id string) (bool, error) {
+	var n int
+	err := tx.QueryRow(`SELECT COUNT(1) FROM change_log WHERE entity = ? AND entity_id = ?`, entity, id).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func (s *Store) missingChangeLogCount() (int, error) {
+	var n int
+	err := s.db.QueryRow(`
+		SELECT
+			(SELECT COUNT(*) FROM folders f WHERE f.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'folder' AND c.entity_id = f.id))
+			+ (SELECT COUNT(*) FROM identities i WHERE i.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'identity' AND c.entity_id = i.id))
+			+ (SELECT COUNT(*) FROM tags t WHERE t.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'tag' AND c.entity_id = t.id))
+			+ (SELECT COUNT(*) FROM hosts h WHERE h.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'host' AND c.entity_id = h.id))
+			+ (SELECT COUNT(*) FROM snippets s WHERE s.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'snippet' AND c.entity_id = s.id))
+			+ (SELECT COUNT(*) FROM known_hosts k WHERE NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'known_host' AND c.entity_id = k.id))
+	`).Scan(&n)
+	return n, err
+}
+
+func sortFolderRecordsParentsFirst(folders []model.Folder) {
+	byID := make(map[string]model.Folder, len(folders))
+	for _, f := range folders {
+		byID[f.ID] = f
+	}
+	depth := func(f model.Folder) int {
+		d := 0
+		seen := map[string]struct{}{}
+		cur := f.ParentID
+		for cur != nil && *cur != "" {
+			if _, ok := seen[*cur]; ok {
+				break
+			}
+			seen[*cur] = struct{}{}
+			p, ok := byID[*cur]
+			if !ok {
+				break
+			}
+			d++
+			cur = p.ParentID
+		}
+		return d
+	}
+	sort.SliceStable(folders, func(i, j int) bool {
+		return depth(folders[i]) < depth(folders[j])
+	})
 }
 
 func lwwWins(remoteTs, remoteOrigin, localTs, localOrigin string) bool {
