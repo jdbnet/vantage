@@ -8,14 +8,14 @@
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "http://localhost:5173",
   "author": {
-    "name": "JDB Net",
+    "name": "Jamie",
     "email": "jamie@jdbnet.co.uk"
   },
   "info": {
-    "companyName": "JDB Net",
+    "companyName": "JDB-NET Limited",
     "productName": "Vantage",
     "productVersion": "0.0.0",
-    "copyright": "Copyright JDB Net",
+    "copyright": "Copyright JDB-NET Limited",
     "comments": "SSH, VNC, and RDP client"
   }
 }
