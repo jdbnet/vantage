@@ -13,12 +13,12 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/jdbnet/vantage/internal/cryptox"
 	"github.com/jdbnet/vantage/internal/guacx"
 	"github.com/jdbnet/vantage/internal/idgen"
 	"github.com/jdbnet/vantage/internal/model"
 	"github.com/jdbnet/vantage/internal/sshx"
 	"github.com/jdbnet/vantage/internal/store"
+	"github.com/jdbnet/vantage/internal/syncx"
 	"github.com/wwt/guac"
 )
 
@@ -571,119 +571,11 @@ func (s *Server) handleSyncWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) rewriteSnapshotSecrets(snap map[string]any, outbound bool) {
-	box := s.d.Box()
-	if box == nil {
-		return
-	}
-	for _, m := range asMapSlice(snap["identities"]) {
-		s.rewriteIdentMap(m, box, outbound)
-	}
-	for _, m := range asMapSlice(snap["hosts"]) {
-		s.rewriteHostMap(m, box, outbound)
-	}
-}
-
-func (s *Server) rewriteIdentMap(m map[string]any, box *cryptox.Box, outbound bool) {
-	if m == nil {
-		return
-	}
-	if outbound {
-		if blob, _ := m["encrypted_blob"].(string); blob != "" {
-			if plain, err := box.Decrypt(blob); err == nil {
-				m["secret"] = json.RawMessage(plain)
-				delete(m, "encrypted_blob")
-			}
-		}
-		if p, ok := m["encrypted_key_passphrase"].(*string); ok && p != nil {
-			if plain, err := box.Decrypt(*p); err == nil {
-				m["key_passphrase"] = plain
-				delete(m, "encrypted_key_passphrase")
-			}
-		}
-		if p, ok := m["encrypted_key_passphrase"].(string); ok && p != "" {
-			if plain, err := box.Decrypt(p); err == nil {
-				m["key_passphrase"] = plain
-				delete(m, "encrypted_key_passphrase")
-			}
-		}
-		return
-	}
-	if sec, ok := m["secret"]; ok {
-		raw, _ := json.Marshal(sec)
-		if blob, err := box.Encrypt(string(raw)); err == nil {
-			m["encrypted_blob"] = blob
-			delete(m, "secret")
-		}
-	}
-	if kp, _ := m["key_passphrase"].(string); kp != "" {
-		if enc, err := box.Encrypt(kp); err == nil {
-			m["encrypted_key_passphrase"] = enc
-			delete(m, "key_passphrase")
-		}
-	}
-}
-
-func (s *Server) rewriteHostMap(m map[string]any, box *cryptox.Box, outbound bool) {
-	if m == nil {
-		return
-	}
-	if outbound {
-		if blob, _ := m["inline_identity_encrypted_blob"].(string); blob != "" {
-			if plain, err := box.Decrypt(blob); err == nil {
-				m["inline_secret"] = json.RawMessage(plain)
-				delete(m, "inline_identity_encrypted_blob")
-			}
-		}
-		if p, ok := m["inline_identity_encrypted_key_passphrase"].(*string); ok && p != nil {
-			if plain, err := box.Decrypt(*p); err == nil {
-				m["inline_key_passphrase"] = plain
-				delete(m, "inline_identity_encrypted_key_passphrase")
-			}
-		}
-		if p, ok := m["inline_identity_encrypted_key_passphrase"].(string); ok && p != "" {
-			if plain, err := box.Decrypt(p); err == nil {
-				m["inline_key_passphrase"] = plain
-				delete(m, "inline_identity_encrypted_key_passphrase")
-			}
-		}
-		return
-	}
-	if sec, ok := m["inline_secret"]; ok {
-		raw, _ := json.Marshal(sec)
-		if blob, err := box.Encrypt(string(raw)); err == nil {
-			m["inline_identity_encrypted_blob"] = blob
-			delete(m, "inline_secret")
-		}
-	}
-	if kp, _ := m["inline_key_passphrase"].(string); kp != "" {
-		if enc, err := box.Encrypt(kp); err == nil {
-			m["inline_identity_encrypted_key_passphrase"] = enc
-			delete(m, "inline_key_passphrase")
-		}
-	}
+	syncx.RewriteSnapshot(s.d.Box(), snap, outbound)
 }
 
 func (s *Server) rewriteOpSecrets(op model.ChangeOp, outbound bool) model.ChangeOp {
-	if op.Entity != "identity" && op.Entity != "host" {
-		return op
-	}
-	box := s.d.Box()
-	if box == nil {
-		return op
-	}
-	var m map[string]any
-	if json.Unmarshal(op.Payload, &m) != nil {
-		return op
-	}
-	if op.Entity == "identity" {
-		s.rewriteIdentMap(m, box, outbound)
-	}
-	if op.Entity == "host" {
-		s.rewriteHostMap(m, box, outbound)
-	}
-	b, _ := json.Marshal(m)
-	op.Payload = b
-	return op
+	return syncx.RewriteOp(s.d.Box(), op, outbound)
 }
 
 func strconvAtoi(s string) (int, error) {

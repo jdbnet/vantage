@@ -279,7 +279,7 @@ func pushLocal(st *store.Store, box *cryptox.Box, base, key string, last *int64)
 	}
 	out := make([]model.ChangeOp, 0, len(ops))
 	for _, op := range ops {
-		out = append(out, rewriteOp(box, op, true))
+		out = append(out, RewriteOp(box, op, true))
 	}
 	body, _ := json.Marshal(map[string]any{"ops": out})
 	req, err := http.NewRequest(http.MethodPost, base+"/api/sync/push", bytes.NewReader(body))
@@ -344,7 +344,7 @@ func pullRemote(st *store.Store, box *cryptox.Box, base, key string) error {
 func applyPulledOps(st *store.Store, box *cryptox.Box, ops []model.ChangeOp) error {
 	out := make([]model.ChangeOp, 0, len(ops))
 	for _, op := range ops {
-		out = append(out, rewriteOp(box, op, false))
+		out = append(out, RewriteOp(box, op, false))
 	}
 	return st.ApplyRemoteOps(out)
 }
@@ -567,33 +567,4 @@ func (c *Client) connectWS() {
 			return
 		}
 	}
-}
-
-func rewriteOp(box *cryptox.Box, op model.ChangeOp, outbound bool) model.ChangeOp {
-	if box == nil || (op.Entity != "identity" && op.Entity != "host") {
-		return op
-	}
-	var m map[string]any
-	if json.Unmarshal(op.Payload, &m) != nil {
-		return op
-	}
-	if op.Entity == "identity" {
-		if outbound {
-			if blob, _ := m["encrypted_blob"].(string); blob != "" {
-				if plain, err := box.Decrypt(blob); err == nil {
-					m["secret"] = json.RawMessage(plain)
-					delete(m, "encrypted_blob")
-				}
-			}
-		} else if sec, ok := m["secret"]; ok {
-			raw, _ := json.Marshal(sec)
-			if blob, err := box.Encrypt(string(raw)); err == nil {
-				m["encrypted_blob"] = blob
-				delete(m, "secret")
-			}
-		}
-	}
-	b, _ := json.Marshal(m)
-	op.Payload = b
-	return op
 }
