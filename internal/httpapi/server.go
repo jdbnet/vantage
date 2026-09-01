@@ -101,7 +101,10 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/export", s.auth("read:hosts", s.handleExport))
 	mux.HandleFunc("POST /api/import", s.auth("write:hosts", s.handleImport))
 
-	mux.HandleFunc("GET /api/sync/snapshot", s.auth("sync", s.handleSyncSnapshot))
+	mux.HandleFunc("GET /api/sync/files", s.auth("sync", s.handleSyncFileList))
+	mux.HandleFunc("GET /api/sync/files/content", s.auth("sync", s.handleSyncFileGet))
+	mux.HandleFunc("PUT /api/sync/files/content", s.auth("sync", s.handleSyncFilePut))
+	mux.HandleFunc("DELETE /api/sync/files/content", s.auth("sync", s.handleSyncFileDelete))
 	mux.HandleFunc("GET /api/sync/changes", s.auth("sync", s.handleSyncChanges))
 	mux.HandleFunc("POST /api/sync/push", s.auth("sync", s.handleSyncPush))
 	mux.HandleFunc("GET /api/sync/status", s.auth("", s.handleSyncStatus))

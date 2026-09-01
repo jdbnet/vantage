@@ -28,11 +28,13 @@ type Status struct {
 }
 
 type Client struct {
-	st    *store.Store
-	boxFn func() *cryptox.Box
+	st      *store.Store
+	boxFn   func() *cryptox.Box
+	dataDir string
 
-	stop chan struct{}
-	kick chan struct{}
+	stop     chan struct{}
+	kick     chan struct{}
+	fileKick chan struct{}
 
 	mu            sync.Mutex
 	stopped       bool
@@ -48,14 +50,17 @@ type Client struct {
 	ws   *websocket.Conn
 }
 
-func StartClient(st *store.Store, boxFn func() *cryptox.Box) *Client {
+func StartClient(st *store.Store, boxFn func() *cryptox.Box, dataDir string) *Client {
 	c := &Client{
-		st:    st,
-		boxFn: boxFn,
-		stop:  make(chan struct{}),
-		kick:  make(chan struct{}, 1),
+		st:       st,
+		boxFn:    boxFn,
+		dataDir:  dataDir,
+		stop:     make(chan struct{}),
+		kick:     make(chan struct{}, 1),
+		fileKick: make(chan struct{}, 1),
 	}
 	go c.loop()
+	go c.fileLoop()
 	return c
 }
 
@@ -79,6 +84,12 @@ func (c *Client) Kick() {
 	select {
 	case c.kick <- struct{}{}:
 	default:
+	}
+	if c.fileKick != nil {
+		select {
+		case c.fileKick <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -188,7 +199,17 @@ func (c *Client) setError(err error) {
 func (c *Client) setSuccess() {
 	c.mu.Lock()
 	c.lastSuccessAt = time.Now()
-	c.lastError = ""
+	if !strings.HasPrefix(c.lastError, "shared files:") {
+		c.lastError = ""
+	}
+	c.mu.Unlock()
+}
+
+func (c *Client) clearFileError() {
+	c.mu.Lock()
+	if strings.HasPrefix(c.lastError, "shared files:") {
+		c.lastError = ""
+	}
 	c.mu.Unlock()
 }
 

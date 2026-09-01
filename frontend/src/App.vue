@@ -2540,7 +2540,7 @@ async function deleteIdentityRow(id: string) {
         <label class="mt-3 block text-xs uppercase text-slate-500">Shared files directory</label>
         <input v-model="settingsForm.shared_files_dir" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
         <p class="mt-1 text-[11px] text-slate-500">
-          Per-host folders are created here for RDP drives. If guacd runs in Docker, this path must be mounted into the container.
+          All RDP sessions on this node share this folder as the Vantage drive. When desktop sync is configured, this folder is kept in sync with vantaged. If guacd runs in Docker, this path must be mounted into the container.
         </p>
         <label class="mt-3 block text-xs uppercase text-slate-500">Terminal theme</label>
         <select v-model="settingsForm.terminal_theme" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm">
@@ -2582,7 +2582,7 @@ async function deleteIdentityRow(id: string) {
         <template v-if="appMode === 'desktop' || appSettings?.mode === 'desktop'">
           <label class="mt-3 block text-xs uppercase text-slate-500">Sync server URL</label>
           <input v-model="settingsForm.sync_url" placeholder="https://vantage.example" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
-          <p class="mt-1 text-[11px] text-slate-500">Optional. Leave blank to use this app by itself. Set this to a vantaged URL only if you want inventory sync.</p>
+          <p class="mt-1 text-[11px] text-slate-500">Optional. Leave blank to use this app by itself. Set this to a vantaged URL to sync inventory and the shared files folder.</p>
           <label class="mt-3 block text-xs uppercase text-slate-500">Sync API key</label>
           <input v-model="settingsForm.sync_api_key" type="password" :placeholder="appSettings?.sync_api_key_set ? 'Set (leave blank to keep)' : 'Paste API key from vantaged'" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
           <p class="mt-2 text-xs text-slate-400">

@@ -216,7 +216,7 @@ func (c *Core) StartSyncClient() {
 	if old != nil {
 		old.Stop()
 	}
-	sc := syncx.StartClient(c.Store, c.Box)
+	sc := syncx.StartClient(c.Store, c.Box, c.DataDir)
 	c.mu.Lock()
 	c.syncClient = sc
 	c.mu.Unlock()

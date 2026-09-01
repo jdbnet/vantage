@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -363,9 +362,8 @@ func (s *Server) handleGuacWS(w http.ResponseWriter, r *http.Request) {
 		ColorDepth: st.DisplayColorDepth,
 	}
 	if proto == "rdp" {
-		driveRoot := s.sharedFilesDir(st)
-		drivePath := filepath.Join(driveRoot, hostID)
-		if err := os.MkdirAll(drivePath, 0o700); err != nil {
+		drivePath := s.sharedFilesDir(st)
+		if err := ensureSharedDir(drivePath); err != nil {
 			sendErr("shared files directory: " + err.Error())
 			return
 		}

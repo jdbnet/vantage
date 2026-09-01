@@ -21,17 +21,28 @@ func (s *Server) sharedFilesDir(st model.Settings) string {
 	return dir
 }
 
+// ensureSharedDir creates dir so both vantaged (UID 65532) and guacd (often UID 1000) can write.
+func ensureSharedDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o777)
+}
+
+func ensureSharedFileMode(path string) error {
+	return os.Chmod(path, 0o666)
+}
+
 func (s *Server) sharedHostRoot(hostID string) (string, error) {
 	if _, err := s.d.Store.GetHost(hostID); err != nil {
 		return "", err
 	}
 	st, _ := s.d.Store.LoadSettings()
-	root := filepath.Join(s.sharedFilesDir(st), hostID)
-	abs, err := filepath.Abs(root)
+	abs, err := filepath.Abs(s.sharedFilesDir(st))
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(abs, 0o700); err != nil {
+	if err := ensureSharedDir(abs); err != nil {
 		return "", err
 	}
 	return abs, nil
@@ -72,6 +83,59 @@ func jailJoin(root, rel string) (string, error) {
 		return resolved, nil
 	}
 	return abs, nil
+}
+
+type sharedFileMeta struct {
+	Path  string `json:"path"`
+	Size  int64  `json:"size"`
+	Mtime int64  `json:"mtime"`
+	Dir   bool   `json:"dir"`
+}
+
+func (s *Server) sharedRoot() (string, error) {
+	st, _ := s.d.Store.LoadSettings()
+	abs, err := filepath.Abs(s.sharedFilesDir(st))
+	if err != nil {
+		return "", err
+	}
+	if err := ensureSharedDir(abs); err != nil {
+		return "", err
+	}
+	return abs, nil
+}
+
+func listSharedTree(root string) ([]sharedFileMeta, error) {
+	var out []sharedFileMeta
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil || rel == "." {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if strings.HasSuffix(rel, ".vantage-tmp") {
+			return nil
+		}
+		if !d.IsDir() && !info.Mode().IsRegular() {
+			return nil
+		}
+		out = append(out, sharedFileMeta{
+			Path:  filepath.ToSlash(rel),
+			Size:  info.Size(),
+			Mtime: info.ModTime().Unix(),
+			Dir:   d.IsDir(),
+		})
+		return nil
+	})
+	if out == nil {
+		out = []sharedFileMeta{}
+	}
+	return out, err
 }
 
 func (s *Server) handleSharedList(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +193,7 @@ func (s *Server) handleSharedMkdir(w http.ResponseWriter, r *http.Request) {
 		writeSharedErr(w, err)
 		return
 	}
-	if err := os.Mkdir(abs, 0o700); err != nil {
+	if err := ensureSharedDir(abs); err != nil {
 		writeErr(w, 400, err.Error())
 		return
 	}
@@ -204,7 +268,7 @@ func (s *Server) handleSharedUpload(w http.ResponseWriter, r *http.Request) {
 		writeSharedErr(w, err)
 		return
 	}
-	dst, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	dst, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o666)
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return
@@ -214,6 +278,7 @@ func (s *Server) handleSharedUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	_ = ensureSharedFileMode(dest)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 

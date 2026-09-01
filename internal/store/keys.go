@@ -22,7 +22,7 @@ var DefaultScopes = []model.APIKeyScopeDef{
 	{ID: "read:audit", Label: "Read audit", Description: "View connection audit log"},
 	{ID: "terminal:connect", Label: "Terminal", Description: "Open SSH, VNC, and RDP sessions"},
 	{ID: "sftp:manage", Label: "SFTP", Description: "Browse and transfer files over SFTP"},
-	{ID: "sync", Label: "Sync", Description: "Bidirectional inventory sync with a desktop client"},
+	{ID: "sync", Label: "Sync", Description: "Bidirectional inventory and shared-folder sync with a desktop client"},
 }
 
 func (s *Store) ListAPIKeys() ([]model.APIKey, error) {
