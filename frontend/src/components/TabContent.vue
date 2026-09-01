@@ -317,12 +317,7 @@ function guacElementSize(): { width: number; height: number } | null {
 }
 
 function guacConnectSize(): { width: number; height: number } {
-  return (
-    guacElementSize() ?? {
-      width: props.settings?.display_width || 1920,
-      height: props.settings?.display_height || 1080,
-    }
-  );
+  return guacElementSize() ?? { width: 1920, height: 1080 };
 }
 
 function fitGuacDisplay() {

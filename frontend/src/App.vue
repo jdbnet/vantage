@@ -330,9 +330,6 @@ const settingsForm = ref({
   terminal_theme: "default",
   terminal_font_family: "DM Mono, ui-monospace, monospace",
   terminal_font_size: 14,
-  display_color_depth: 24,
-  display_width: 1920,
-  display_height: 1080,
   accent_color: DEFAULT_ACCENT,
   sync_url: "",
   sync_api_key: "",
@@ -884,9 +881,6 @@ async function openSettings() {
       terminal_theme: st.terminal_theme,
       terminal_font_family: st.terminal_font_family,
       terminal_font_size: st.terminal_font_size,
-      display_color_depth: st.display_color_depth,
-      display_width: st.display_width,
-      display_height: st.display_height,
       accent_color: normalizeAccent(st.accent_color),
       sync_url: st.sync_url,
       sync_api_key: "",
@@ -904,6 +898,9 @@ async function submitSettings() {
     const body: Record<string, unknown> = { ...settingsForm.value };
     body.accent_color = normalizeAccent(settingsForm.value.accent_color);
     if (!settingsForm.value.sync_api_key) delete body.sync_api_key;
+    delete body.display_width;
+    delete body.display_height;
+    delete body.display_color_depth;
     if (appMode.value === "desktop" || appSettings.value?.mode === "desktop") {
       delete body.shared_files_dir;
       delete body.guacd_drive_path;
@@ -1484,6 +1481,7 @@ async function deleteIdentityRow(id: string) {
           <span class="inline-flex items-center gap-1"><Settings class="h-3.5 w-3.5" /> Settings</span>
         </button>
         <button
+          v-if="appMode !== 'desktop' && appSettings?.mode !== 'desktop'"
           type="button"
           class="hidden rounded-lg px-3 py-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-white md:inline-flex"
           @click="openApiKeys"
@@ -2726,12 +2724,6 @@ async function deleteIdentityRow(id: string) {
           >
             Default
           </button>
-        </div>
-        <label class="mt-3 block text-xs uppercase text-slate-500">Display width / height / color depth</label>
-        <div class="mt-1 flex gap-2">
-          <input v-model.number="settingsForm.display_width" type="number" class="w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
-          <input v-model.number="settingsForm.display_height" type="number" class="w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
-          <input v-model.number="settingsForm.display_color_depth" type="number" class="w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
         </div>
         <template v-if="appMode === 'desktop' || appSettings?.mode === 'desktop'">
           <label class="mt-3 block text-xs uppercase text-slate-500">Sync server URL</label>

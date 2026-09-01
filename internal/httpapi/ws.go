@@ -352,8 +352,8 @@ func (s *Server) handleGuacWS(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		log.Printf("%s ws end host=%s from %s after %s", proto, hostID, reqIP(r), time.Since(t0).Round(time.Millisecond))
 	}()
-	width := st.DisplayWidth
-	height := st.DisplayHeight
+	width := 1920
+	height := 1080
 	if n, _ := strconvAtoi(r.URL.Query().Get("width")); n >= 320 && n <= 7680 {
 		width = n
 	}
@@ -370,7 +370,7 @@ func (s *Server) handleGuacWS(w http.ResponseWriter, r *http.Request) {
 		Domain:     creds.Domain,
 		Width:      width,
 		Height:     height,
-		ColorDepth: st.DisplayColorDepth,
+		ColorDepth: 24,
 	}
 	if proto == "rdp" {
 		local := s.sharedFilesDir(st)
