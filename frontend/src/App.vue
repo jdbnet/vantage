@@ -300,6 +300,8 @@ const hostUp = ref<Record<string, boolean | undefined>>({});
 const hostViaJump = ref<Record<string, boolean>>({});
 let hostPingTimer = 0;
 let hostPingGen = 0;
+let hostPingAbort: AbortController | null = null;
+const HOST_PING_CHUNK = 8;
 let inventoryHeadTimer = 0;
 const lastInventoryHead = ref(-1);
 let syncStatusTimer = 0;
@@ -514,19 +516,27 @@ async function scanSidebarHosts() {
   const ids = browseHosts.value.map((h) => h.id);
   if (!ids.length) return;
   const gen = ++hostPingGen;
+  hostPingAbort?.abort();
+  const ac = new AbortController();
+  hostPingAbort = ac;
   try {
-    const { up, via_jump } = await api.pingHosts(ids);
-    if (gen !== hostPingGen) return;
-    const next: Record<string, boolean | undefined> = { ...hostUp.value };
-    const nextVia: Record<string, boolean> = { ...hostViaJump.value };
-    for (const id of ids) {
-      next[id] = up[id] === true;
-      nextVia[id] = via_jump?.[id] === true;
+    for (let i = 0; i < ids.length; i += HOST_PING_CHUNK) {
+      if (gen !== hostPingGen) return;
+      const chunk = ids.slice(i, i + HOST_PING_CHUNK);
+      const { up, via_jump } = await api.pingHosts(chunk, ac.signal);
+      if (gen !== hostPingGen) return;
+      const next: Record<string, boolean | undefined> = { ...hostUp.value };
+      const nextVia: Record<string, boolean> = { ...hostViaJump.value };
+      for (const id of chunk) {
+        next[id] = up[id] === true;
+        nextVia[id] = via_jump?.[id] === true;
+      }
+      hostUp.value = next;
+      hostViaJump.value = nextVia;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
-    hostUp.value = next;
-    hostViaJump.value = nextVia;
   } catch {
-    /* ignore */
+    /* ignore aborted and failed scans */
   }
 }
 
@@ -543,6 +553,9 @@ function stopHostPingLoop() {
     window.clearInterval(hostPingTimer);
     hostPingTimer = 0;
   }
+  hostPingGen++;
+  hostPingAbort?.abort();
+  hostPingAbort = null;
   stopInventoryHeadLoop();
 }
 

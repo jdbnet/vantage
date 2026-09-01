@@ -202,7 +202,7 @@ export const api = {
     return handle<{ up: boolean; via_jump?: boolean }>(res);
   },
 
-  async pingHosts(ids: string[]): Promise<{
+  async pingHosts(ids: string[], signal?: AbortSignal): Promise<{
     up: Record<string, boolean>;
     via_jump?: Record<string, boolean>;
   }> {
@@ -211,6 +211,7 @@ export const api = {
       credentials: "include",
       headers: jsonHeaders,
       body: JSON.stringify({ ids }),
+      signal,
     });
     return handle<{ up: Record<string, boolean>; via_jump?: Record<string, boolean> }>(res);
   },
