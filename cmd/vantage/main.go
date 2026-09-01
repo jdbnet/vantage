@@ -44,6 +44,9 @@ func main() {
 			Handler: core.Handler(),
 		},
 		BackgroundColour: &options.RGBA{R: 13, G: 17, B: 23, A: 255},
+		OnDomReady: func(ctx context.Context) {
+			enableWebkitPopouts()
+		},
 		OnShutdown: func(ctx context.Context) {
 			_ = core.Close()
 		},

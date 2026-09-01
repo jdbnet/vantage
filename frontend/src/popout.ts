@@ -49,8 +49,12 @@ export function openPopout(opts: {
   const notifyClosed = () => {
     if (closed) return;
     closed = true;
+    window.clearInterval(closedPoll);
     opts.onClose();
   };
+  const closedPoll = window.setInterval(() => {
+    if (win.closed) notifyClosed();
+  }, 400);
   win.addEventListener("beforeunload", notifyClosed);
   win.addEventListener("pagehide", notifyClosed);
 
@@ -59,6 +63,7 @@ export function openPopout(opts: {
     mount,
     close() {
       closed = true;
+      window.clearInterval(closedPoll);
       win.removeEventListener("beforeunload", notifyClosed);
       win.removeEventListener("pagehide", notifyClosed);
       try {
