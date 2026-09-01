@@ -434,6 +434,24 @@ export const api = {
     return handle(res);
   },
 
+  async syncStatus(): Promise<SyncStatus> {
+    const res = await apiFetch("/api/sync/status", { credentials: "include" });
+    return handle(res);
+  },
+
+  async syncResync(): Promise<void> {
+    const res = await apiFetch("/api/sync/resync", {
+      method: "POST",
+      credentials: "include",
+    });
+    await handle(res);
+  },
+
+  async inventoryHead(): Promise<{ head: number }> {
+    const res = await apiFetch("/api/inventory/head", { credentials: "include" });
+    return handle(res);
+  },
+
   async changePassword(current: string, next: string): Promise<void> {
     const res = await apiFetch("/api/password", {
       method: "POST",
@@ -714,6 +732,16 @@ export interface CreateApiKeyResponse {
   scopes: string[];
   expires_at: string | null;
   key: string;
+}
+
+export interface SyncStatus {
+  enabled: boolean;
+  configured: boolean;
+  vault_locked: boolean;
+  ws_connected: boolean;
+  last_success_at: string | null;
+  last_error: string;
+  last_error_at: string | null;
 }
 
 export interface Settings {

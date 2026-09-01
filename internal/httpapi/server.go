@@ -16,6 +16,7 @@ import (
 	"github.com/jdbnet/vantage/internal/model"
 	"github.com/jdbnet/vantage/internal/sshx"
 	"github.com/jdbnet/vantage/internal/store"
+	"github.com/jdbnet/vantage/internal/syncx"
 )
 
 //go:embed all:dist
@@ -36,6 +37,8 @@ type Deps struct {
 	Login           func(username, password string) error
 	ChangePassword  func(current, newPassword string) error
 	OnSettingsSaved func()
+	SyncStatus      func() syncx.Status
+	KickSync        func() error
 }
 
 type Server struct {
@@ -101,6 +104,9 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/sync/snapshot", s.auth("sync", s.handleSyncSnapshot))
 	mux.HandleFunc("GET /api/sync/changes", s.auth("sync", s.handleSyncChanges))
 	mux.HandleFunc("POST /api/sync/push", s.auth("sync", s.handleSyncPush))
+	mux.HandleFunc("GET /api/sync/status", s.auth("", s.handleSyncStatus))
+	mux.HandleFunc("POST /api/sync/resync", s.auth("", s.handleSyncResync))
+	mux.HandleFunc("GET /api/inventory/head", s.auth("read:hosts", s.handleInventoryHead))
 	mux.HandleFunc("/ws/sync", s.handleSyncWS)
 	mux.HandleFunc("/ws/terminal", s.handleTerminalWS)
 	mux.HandleFunc("/ws/guac", s.handleGuacWS)
@@ -875,6 +881,35 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 	st.Mode = s.d.Mode
 	st.SharedFilesDir = s.sharedFilesDir(st)
 	writeJSON(w, 200, st)
+}
+
+func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
+	if s.d.SyncStatus == nil {
+		writeJSON(w, 200, syncx.Status{Enabled: false})
+		return
+	}
+	writeJSON(w, 200, s.d.SyncStatus())
+}
+
+func (s *Server) handleSyncResync(w http.ResponseWriter, r *http.Request) {
+	if s.d.Mode != "desktop" || s.d.KickSync == nil {
+		writeErr(w, 404, "sync client is only available on the desktop app")
+		return
+	}
+	if err := s.d.KickSync(); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) handleInventoryHead(w http.ResponseWriter, r *http.Request) {
+	n, err := s.d.Store.HeadSeq()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"head": n})
 }
 
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {

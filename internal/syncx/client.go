@@ -3,10 +3,12 @@ package syncx
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -15,49 +17,211 @@ import (
 	"github.com/jdbnet/vantage/internal/store"
 )
 
-func StartClient(st *store.Store, boxFn func() *cryptox.Box) func() {
-	stop := make(chan struct{})
-	go loop(st, boxFn, stop)
-	return func() { close(stop) }
+type Status struct {
+	Enabled       bool    `json:"enabled"`
+	Configured    bool    `json:"configured"`
+	VaultLocked   bool    `json:"vault_locked"`
+	WSConnected   bool    `json:"ws_connected"`
+	LastSuccessAt *string `json:"last_success_at"`
+	LastError     string  `json:"last_error"`
+	LastErrorAt   *string `json:"last_error_at"`
 }
 
-func loop(st *store.Store, boxFn func() *cryptox.Box, stop <-chan struct{}) {
-	var lastPush int64
+type Client struct {
+	st    *store.Store
+	boxFn func() *cryptox.Box
+
+	stop chan struct{}
+	kick chan struct{}
+
+	mu            sync.Mutex
+	stopped       bool
+	lastPush      int64
+	configured    bool
+	vaultLocked   bool
+	wsConnected   bool
+	lastSuccessAt time.Time
+	lastError     string
+	lastErrorAt   time.Time
+
+	wsMu sync.Mutex
+	ws   *websocket.Conn
+}
+
+func StartClient(st *store.Store, boxFn func() *cryptox.Box) *Client {
+	c := &Client{
+		st:    st,
+		boxFn: boxFn,
+		stop:  make(chan struct{}),
+		kick:  make(chan struct{}, 1),
+	}
+	go c.loop()
+	return c
+}
+
+func (c *Client) Stop() {
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return
+	}
+	c.stopped = true
+	close(c.stop)
+	c.mu.Unlock()
+	c.closeWS()
+}
+
+func (c *Client) Kick() {
+	c.mu.Lock()
+	c.lastPush = 0
+	c.mu.Unlock()
+	c.closeWS()
+	select {
+	case c.kick <- struct{}{}:
+	default:
+	}
+}
+
+func (c *Client) Status() Status {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := Status{
+		Enabled:     true,
+		Configured:  c.configured,
+		VaultLocked: c.vaultLocked,
+		WSConnected: c.wsConnected,
+		LastError:   c.lastError,
+	}
+	if !c.lastSuccessAt.IsZero() {
+		s := c.lastSuccessAt.UTC().Format(time.RFC3339)
+		st.LastSuccessAt = &s
+	}
+	if !c.lastErrorAt.IsZero() {
+		s := c.lastErrorAt.UTC().Format(time.RFC3339)
+		st.LastErrorAt = &s
+	}
+	return st
+}
+
+func (c *Client) loop() {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-stop:
+		case <-c.stop:
 			return
+		default:
+		}
+		c.pushPull()
+		select {
+		case <-c.stop:
+			return
+		case <-c.kick:
+			continue
+		default:
+		}
+		c.connectWS()
+		select {
+		case <-c.stop:
+			return
+		case <-c.kick:
+			continue
 		case <-ticker.C:
-			settings, err := st.LoadSettings()
-			if err != nil || settings.SyncURL == "" {
-				continue
-			}
-			key, ok, _ := st.SyncAPIKey()
-			if !ok || key == "" {
-				continue
-			}
-			box := boxFn()
-			if box == nil {
-				continue
-			}
-			base := strings.TrimRight(settings.SyncURL, "/")
-			if err := pushLocal(st, box, base, key, &lastPush); err != nil {
-				log.Printf("sync push: %v", err)
-			}
-			if err := pullRemote(st, box, base, key); err != nil {
-				log.Printf("sync pull: %v", err)
-			}
-			connectWS(st, box, base, key, stop)
 		}
 	}
+}
+
+func (c *Client) pushPull() {
+	settings, err := c.st.LoadSettings()
+	if err != nil || settings.SyncURL == "" {
+		c.setIdle(false, false)
+		return
+	}
+	key, ok, _ := c.st.SyncAPIKey()
+	if !ok || key == "" {
+		c.setIdle(false, false)
+		return
+	}
+	box := c.boxFn()
+	if box == nil {
+		c.setIdle(true, true)
+		return
+	}
+	c.setIdle(true, false)
+	base := strings.TrimRight(settings.SyncURL, "/")
+	c.mu.Lock()
+	lastPush := c.lastPush
+	c.mu.Unlock()
+	if err := pushLocal(c.st, box, base, key, &lastPush); err != nil {
+		c.setError(err)
+		log.Printf("sync push: %v", err)
+	} else {
+		c.mu.Lock()
+		c.lastPush = lastPush
+		c.mu.Unlock()
+	}
+	if err := pullRemote(c.st, box, base, key); err != nil {
+		c.setError(err)
+		log.Printf("sync pull: %v", err)
+		return
+	}
+	c.setSuccess()
+}
+
+func (c *Client) setIdle(configured, vaultLocked bool) {
+	c.mu.Lock()
+	c.configured = configured
+	c.vaultLocked = vaultLocked
+	c.mu.Unlock()
+}
+
+func (c *Client) setError(err error) {
+	if err == nil {
+		return
+	}
+	c.mu.Lock()
+	c.lastError = err.Error()
+	c.lastErrorAt = time.Now()
+	c.mu.Unlock()
+}
+
+func (c *Client) setSuccess() {
+	c.mu.Lock()
+	c.lastSuccessAt = time.Now()
+	c.lastError = ""
+	c.mu.Unlock()
+}
+
+func (c *Client) closeWS() {
+	c.wsMu.Lock()
+	conn := c.ws
+	c.ws = nil
+	c.wsMu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+	c.mu.Lock()
+	c.wsConnected = false
+	c.mu.Unlock()
+}
+
+func (c *Client) setWS(conn *websocket.Conn) {
+	c.wsMu.Lock()
+	c.ws = conn
+	c.wsMu.Unlock()
+	c.mu.Lock()
+	c.wsConnected = conn != nil
+	c.mu.Unlock()
 }
 
 func authHeader(key string) http.Header {
 	h := http.Header{}
 	h.Set("Authorization", "Bearer "+key)
 	return h
+}
+
+func httpStatusError(op string, status int) error {
+	return fmt.Errorf("%s: HTTP %d", op, status)
 }
 
 func pushLocal(st *store.Store, box *cryptox.Box, base, key string, last *int64) error {
@@ -86,7 +250,7 @@ func pushLocal(st *store.Store, box *cryptox.Box, base, key string, last *int64)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return nil
+		return httpStatusError("push", resp.StatusCode)
 	}
 	*last = head
 	return nil
@@ -104,7 +268,7 @@ func pullRemote(st *store.Store, box *cryptox.Box, base, key string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return nil
+		return httpStatusError("pull", resp.StatusCode)
 	}
 	var body struct {
 		Ops []model.ChangeOp `json:"ops"`
@@ -112,16 +276,36 @@ func pullRemote(st *store.Store, box *cryptox.Box, base, key string) error {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return err
 	}
-	for _, op := range body.Ops {
+	return applyPulledOps(st, box, body.Ops)
+}
+
+func applyPulledOps(st *store.Store, box *cryptox.Box, ops []model.ChangeOp) error {
+	for _, op := range ops {
 		op = rewriteOp(box, op, false)
-		_ = st.ApplyRemoteOp(op)
+		if err := st.ApplyRemoteOp(op); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func connectWS(st *store.Store, box *cryptox.Box, base, key string, stop <-chan struct{}) {
+func (c *Client) connectWS() {
+	settings, err := c.st.LoadSettings()
+	if err != nil || settings.SyncURL == "" {
+		return
+	}
+	key, ok, _ := c.st.SyncAPIKey()
+	if !ok || key == "" {
+		return
+	}
+	box := c.boxFn()
+	if box == nil {
+		return
+	}
+	base := strings.TrimRight(settings.SyncURL, "/")
 	u, err := url.Parse(base)
 	if err != nil {
+		c.setError(err)
 		return
 	}
 	if u.Scheme == "https" {
@@ -130,16 +314,19 @@ func connectWS(st *store.Store, box *cryptox.Box, base, key string, stop <-chan 
 		u.Scheme = "ws"
 	}
 	u.Path = "/ws/sync"
-	hdr := authHeader(key)
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), hdr)
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), authHeader(key))
 	if err != nil {
 		return
 	}
-	defer conn.Close()
-	_ = conn.WriteJSON(map[string]any{"type": "hello", "since": 0})
+	c.setWS(conn)
+	defer c.closeWS()
+	if err := conn.WriteJSON(map[string]any{"type": "hello", "since": 0}); err != nil {
+		c.setError(err)
+		return
+	}
 	for {
 		select {
-		case <-stop:
+		case <-c.stop:
 			return
 		default:
 		}
@@ -156,9 +343,12 @@ func connectWS(st *store.Store, box *cryptox.Box, base, key string, stop <-chan 
 			continue
 		}
 		if msg.Type == "ops" {
-			for _, op := range msg.Ops {
-				op = rewriteOp(box, op, false)
-				_ = st.ApplyRemoteOp(op)
+			if err := applyPulledOps(c.st, box, msg.Ops); err != nil {
+				c.setError(err)
+				continue
+			}
+			if len(msg.Ops) > 0 {
+				c.setSuccess()
 			}
 		}
 		_ = conn.WriteJSON(map[string]any{"type": "poll"})

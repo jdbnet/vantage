@@ -20,17 +20,17 @@ import (
 var Version = "dev"
 
 type Core struct {
-	Store    *store.Store
-	Jar      *auth.Jar
-	Conns    *sshx.Registry
-	DataDir  string
-	Mode     string
-	Listen   string
-	Version  string
-	mu       sync.RWMutex
-	box      *cryptox.Box
-	syncStop func()
-	closed   sync.Once
+	Store      *store.Store
+	Jar        *auth.Jar
+	Conns      *sshx.Registry
+	DataDir    string
+	Mode       string
+	Listen     string
+	Version    string
+	mu         sync.RWMutex
+	box        *cryptox.Box
+	syncClient *syncx.Client
+	closed     sync.Once
 }
 
 func Open(dataDir, mode, listen string, cookieSecure bool) (*Core, error) {
@@ -74,8 +74,8 @@ func Open(dataDir, mode, listen string, cookieSecure bool) (*Core, error) {
 func (c *Core) Close() error {
 	var err error
 	c.closed.Do(func() {
-		if c.syncStop != nil {
-			c.syncStop()
+		if c.syncClient != nil {
+			c.syncClient.Stop()
 		}
 		c.Conns.CloseAll()
 		err = c.Store.Close()
@@ -111,6 +111,8 @@ func (c *Core) Handler() http.Handler {
 		Login:           c.Login,
 		ChangePassword:  c.ChangePassword,
 		OnSettingsSaved: c.StartSyncClient,
+		SyncStatus:      c.SyncStatus,
+		KickSync:        c.KickSync,
 	})
 }
 
@@ -207,10 +209,45 @@ func (c *Core) StartSyncClient() {
 	if c.Mode != "desktop" {
 		return
 	}
-	if c.syncStop != nil {
-		c.syncStop()
+	c.mu.Lock()
+	old := c.syncClient
+	c.syncClient = nil
+	c.mu.Unlock()
+	if old != nil {
+		old.Stop()
 	}
-	c.syncStop = syncx.StartClient(c.Store, c.Box)
+	sc := syncx.StartClient(c.Store, c.Box)
+	c.mu.Lock()
+	c.syncClient = sc
+	c.mu.Unlock()
+}
+
+func (c *Core) SyncStatus() syncx.Status {
+	if c.Mode != "desktop" {
+		return syncx.Status{Enabled: false}
+	}
+	c.mu.RLock()
+	sc := c.syncClient
+	c.mu.RUnlock()
+	if sc == nil {
+		return syncx.Status{Enabled: true}
+	}
+	return sc.Status()
+}
+
+func (c *Core) KickSync() error {
+	if c.Mode != "desktop" {
+		return fmt.Errorf("sync client is only available on the desktop app")
+	}
+	c.mu.RLock()
+	sc := c.syncClient
+	c.mu.RUnlock()
+	if sc == nil {
+		c.StartSyncClient()
+		return nil
+	}
+	sc.Kick()
+	return nil
 }
 
 func loadOrCreateSecret(path string) ([]byte, error) {

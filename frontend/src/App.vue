@@ -12,6 +12,7 @@ import {
   type SnippetRow,
   type HostProtocol,
   type Settings as AppSettings,
+  type SyncStatus,
 } from "@/api";
 import LoginForm from "@/components/LoginForm.vue";
 import TabContent from "@/components/TabContent.vue";
@@ -87,6 +88,7 @@ onUnmounted(() => {
   document.removeEventListener("click", closeSnippetsMenu);
   document.removeEventListener("keydown", onAppKeydown);
   stopHostPingLoop();
+  stopSyncStatusLoop();
 });
 
 async function loadSnippets() {
@@ -196,6 +198,11 @@ const hostUp = ref<Record<string, boolean | undefined>>({});
 const hostViaJump = ref<Record<string, boolean>>({});
 let hostPingTimer = 0;
 let hostPingGen = 0;
+let inventoryHeadTimer = 0;
+const lastInventoryHead = ref(-1);
+let syncStatusTimer = 0;
+const syncStatus = ref<SyncStatus | null>(null);
+const syncResyncBusy = ref(false);
 
 let searchDebounceTimer = 0;
 
@@ -396,6 +403,7 @@ async function refreshBrowse() {
     breadcrumb.value = d.breadcrumb;
     searchActive.value = d.search_active;
     void scanSidebarHosts();
+    await noteInventoryHead();
   } catch (e) {
     loadErr.value = e instanceof Error ? e.message : "Browse failed";
   }
@@ -427,12 +435,49 @@ function startHostPingLoop() {
   hostPingTimer = window.setInterval(() => {
     void scanSidebarHosts();
   }, 30000);
+  startInventoryHeadLoop();
 }
 
 function stopHostPingLoop() {
   if (hostPingTimer) {
     window.clearInterval(hostPingTimer);
     hostPingTimer = 0;
+  }
+  stopInventoryHeadLoop();
+}
+
+async function noteInventoryHead() {
+  try {
+    const { head } = await api.inventoryHead();
+    lastInventoryHead.value = head;
+  } catch {
+    /* ignore */
+  }
+}
+
+async function pollInventoryHead() {
+  if (!loggedIn.value) return;
+  try {
+    const { head } = await api.inventoryHead();
+    if (head === lastInventoryHead.value) return;
+    lastInventoryHead.value = head;
+    await refreshData();
+  } catch {
+    /* ignore */
+  }
+}
+
+function startInventoryHeadLoop() {
+  stopInventoryHeadLoop();
+  inventoryHeadTimer = window.setInterval(() => {
+    void pollInventoryHead();
+  }, 2500);
+}
+
+function stopInventoryHeadLoop() {
+  if (inventoryHeadTimer) {
+    window.clearInterval(inventoryHeadTimer);
+    inventoryHeadTimer = 0;
   }
 }
 
@@ -536,6 +581,7 @@ async function logout() {
     loggedIn.value = false;
     hostUp.value = {};
     stopHostPingLoop();
+    stopSyncStatusLoop();
 }
 
 function fmtDate(ts: string | null): string {
@@ -756,12 +802,71 @@ async function submitSettings() {
     appSettings.value = await api.patchSettings(body);
     settingsForm.value.sync_api_key = "";
     showSettings.value = false;
+    await refreshData();
   } catch (e) {
     settingsErr.value = e instanceof Error ? e.message : "Failed to save settings";
   } finally {
     settingsBusy.value = false;
   }
 }
+
+async function loadSyncStatus() {
+  try {
+    syncStatus.value = await api.syncStatus();
+  } catch {
+    /* ignore */
+  }
+}
+
+function startSyncStatusLoop() {
+  stopSyncStatusLoop();
+  void loadSyncStatus();
+  syncStatusTimer = window.setInterval(() => {
+    void loadSyncStatus();
+  }, 2000);
+}
+
+function stopSyncStatusLoop() {
+  if (syncStatusTimer) {
+    window.clearInterval(syncStatusTimer);
+    syncStatusTimer = 0;
+  }
+}
+
+function syncStatusLabel(s: SyncStatus | null): string {
+  if (!s || !s.enabled) return "Not available";
+  if (!s.configured) return "Idle (not configured)";
+  if (s.vault_locked) return "Waiting for vault";
+  const errNewer =
+    Boolean(s.last_error) &&
+    Boolean(s.last_error_at) &&
+    (!s.last_success_at || s.last_error_at > s.last_success_at);
+  if (errNewer) return s.last_error;
+  if (s.ws_connected) return "Connected";
+  if (s.last_success_at) return "Syncing";
+  return "Syncing";
+}
+
+async function forceResync() {
+  syncResyncBusy.value = true;
+  try {
+    await api.syncResync();
+    await loadSyncStatus();
+    await refreshData();
+  } catch (e) {
+    settingsErr.value = e instanceof Error ? e.message : "Resync failed";
+  } finally {
+    syncResyncBusy.value = false;
+  }
+}
+
+watch(showSettings, (open) => {
+  if (open && (appMode.value === "desktop" || appSettings.value?.mode === "desktop")) {
+    startSyncStatusLoop();
+  } else {
+    stopSyncStatusLoop();
+  }
+});
 
 async function submitPassword() {
   passwordErr.value = "";
@@ -2480,6 +2585,23 @@ async function deleteIdentityRow(id: string) {
           <p class="mt-1 text-[11px] text-slate-500">Optional. Leave blank to use this app by itself. Set this to a vantaged URL only if you want inventory sync.</p>
           <label class="mt-3 block text-xs uppercase text-slate-500">Sync API key</label>
           <input v-model="settingsForm.sync_api_key" type="password" :placeholder="appSettings?.sync_api_key_set ? 'Set (leave blank to keep)' : 'Paste API key from vantaged'" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+          <p class="mt-2 text-xs text-slate-400">
+            Status:
+            <span :class="syncStatus?.last_error && syncStatus.last_error_at && (!syncStatus.last_success_at || syncStatus.last_error_at > syncStatus.last_success_at) ? 'text-red-400' : 'text-slate-300'">
+              {{ syncStatusLabel(syncStatus) }}
+            </span>
+          </p>
+          <p v-if="syncStatus?.last_success_at" class="mt-0.5 text-[11px] text-slate-500">
+            Last success: {{ fmtDate(syncStatus.last_success_at) }}
+          </p>
+          <button
+            type="button"
+            class="mt-2 rounded-lg bg-slate-800 px-3 py-1.5 text-sm hover:bg-slate-700 disabled:opacity-50"
+            :disabled="syncResyncBusy || !syncStatus?.configured"
+            @click="forceResync"
+          >
+            {{ syncResyncBusy ? "Resyncing…" : "Force resync" }}
+          </button>
         </template>
         <label class="mt-3 flex items-center gap-2 text-sm">
           <input v-model="settingsForm.audit_log_enabled" type="checkbox" />
