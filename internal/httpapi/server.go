@@ -102,6 +102,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/import", s.auth("write:hosts", s.handleImport))
 
 	mux.HandleFunc("GET /api/sync/files", s.auth("sync", s.handleSyncFileList))
+	mux.HandleFunc("GET /api/sync/drive", s.auth("sync", s.handleSyncDrive))
 	mux.HandleFunc("GET /api/sync/files/content", s.auth("sync", s.handleSyncFileGet))
 	mux.HandleFunc("PUT /api/sync/files/content", s.auth("sync", s.handleSyncFilePut))
 	mux.HandleFunc("DELETE /api/sync/files/content", s.auth("sync", s.handleSyncFileDelete))
@@ -882,6 +883,11 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		default:
 			patch[k] = asString(v)
 		}
+	}
+	if s.d.Mode == "desktop" {
+		delete(patch, "shared_files_dir")
+		delete(patch, "guacd_drive_path")
+		delete(patch, "listen_addr")
 	}
 	if err := s.d.Store.SaveSettings(patch); err != nil {
 		writeErr(w, 500, err.Error())

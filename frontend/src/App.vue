@@ -224,6 +224,7 @@ const settingsForm = ref({
   listen_addr: "",
   guacd_addr: "",
   shared_files_dir: "",
+  guacd_drive_path: "",
   terminal_theme: "default",
   terminal_font_family: "DM Mono, ui-monospace, monospace",
   terminal_font_size: 14,
@@ -776,6 +777,7 @@ async function openSettings() {
       listen_addr: st.listen_addr,
       guacd_addr: st.guacd_addr,
       shared_files_dir: st.shared_files_dir,
+      guacd_drive_path: st.guacd_drive_path,
       terminal_theme: st.terminal_theme,
       terminal_font_family: st.terminal_font_family,
       terminal_font_size: st.terminal_font_size,
@@ -799,6 +801,11 @@ async function submitSettings() {
     const body: Record<string, unknown> = { ...settingsForm.value };
     body.accent_color = normalizeAccent(settingsForm.value.accent_color);
     if (!settingsForm.value.sync_api_key) delete body.sync_api_key;
+    if (appMode.value === "desktop" || appSettings.value?.mode === "desktop") {
+      delete body.shared_files_dir;
+      delete body.guacd_drive_path;
+      delete body.listen_addr;
+    }
     appSettings.value = await api.patchSettings(body);
     settingsForm.value.sync_api_key = "";
     showSettings.value = false;
@@ -2533,15 +2540,24 @@ async function deleteIdentityRow(id: string) {
       >
         <h2 class="text-lg font-semibold text-white">Settings</h2>
         <p class="mt-1 text-xs text-slate-500">All configuration is stored on this node.</p>
-        <label class="mt-4 block text-xs uppercase text-slate-500">Listen address</label>
-        <input v-model="settingsForm.listen_addr" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
-        <label class="mt-3 block text-xs uppercase text-slate-500">guacd address</label>
+        <template v-if="appMode !== 'desktop' && appSettings?.mode !== 'desktop'">
+          <label class="mt-4 block text-xs uppercase text-slate-500">Listen address</label>
+          <input v-model="settingsForm.listen_addr" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        </template>
+        <label class="mt-4 block text-xs uppercase text-slate-500">guacd address</label>
         <input v-model="settingsForm.guacd_addr" placeholder="127.0.0.1:4822" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
-        <label class="mt-3 block text-xs uppercase text-slate-500">Shared files directory</label>
-        <input v-model="settingsForm.shared_files_dir" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
-        <p class="mt-1 text-[11px] text-slate-500">
-          All RDP sessions on this node share this folder as the Vantage drive. When desktop sync is configured, this folder is kept in sync with vantaged. If guacd runs in Docker, this path must be mounted into the container.
-        </p>
+        <template v-if="appMode !== 'desktop' && appSettings?.mode !== 'desktop'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">Shared files directory</label>
+          <input v-model="settingsForm.shared_files_dir" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+          <p class="mt-1 text-[11px] text-slate-500">
+            Folder on this node (default `/data/shared`). RDP sessions share it as the Vantage drive. Leave **Drive path inside guacd** blank when guacd has that same path mounted.
+          </p>
+          <label class="mt-3 block text-xs uppercase text-slate-500">Drive path inside guacd</label>
+          <input v-model="settingsForm.guacd_drive_path" placeholder="same as shared files directory" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+          <p class="mt-1 text-[11px] text-slate-500">
+            Path guacd opens for the RDP drive. guacamole/guacd is UID 1000 and must have this folder mounted. Leave blank if vantaged and guacd share the same filesystem path. The Download folder inside the drive is created by guacd for browser file transfer and is not synced.
+          </p>
+        </template>
         <label class="mt-3 block text-xs uppercase text-slate-500">Terminal theme</label>
         <select v-model="settingsForm.terminal_theme" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm">
           <option value="default">Default dark</option>
@@ -2582,7 +2598,7 @@ async function deleteIdentityRow(id: string) {
         <template v-if="appMode === 'desktop' || appSettings?.mode === 'desktop'">
           <label class="mt-3 block text-xs uppercase text-slate-500">Sync server URL</label>
           <input v-model="settingsForm.sync_url" placeholder="https://vantage.example" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
-          <p class="mt-1 text-[11px] text-slate-500">Optional. Leave blank to use this app by itself. Set this to a vantaged URL to sync inventory and the shared files folder.</p>
+          <p class="mt-1 text-[11px] text-slate-500">Optional. Leave blank to use this app by itself. Set this to a vantaged URL to sync inventory and shared files. Shared files live in this app's data folder. RDP through a remote guacd uses vantaged's shared folder so the guest matches the web UI.</p>
           <label class="mt-3 block text-xs uppercase text-slate-500">Sync API key</label>
           <input v-model="settingsForm.sync_api_key" type="password" :placeholder="appSettings?.sync_api_key_set ? 'Set (leave blank to keep)' : 'Paste API key from vantaged'" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
           <p class="mt-2 text-xs text-slate-400">

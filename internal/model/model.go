@@ -123,6 +123,7 @@ type Settings struct {
 	ListenAddr         string `json:"listen_addr"`
 	GuacdAddr          string `json:"guacd_addr"`
 	SharedFilesDir     string `json:"shared_files_dir"`
+	GuacdDrivePath     string `json:"guacd_drive_path"`
 	TerminalTheme      string `json:"terminal_theme"`
 	TerminalFontFamily string `json:"terminal_font_family"`
 	TerminalFontSize   int    `json:"terminal_font_size"`

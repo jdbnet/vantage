@@ -1,9 +1,16 @@
 package httpapi
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/jdbnet/vantage/internal/model"
+	"github.com/jdbnet/vantage/internal/store"
 )
 
 type stubDirEntry struct {
@@ -42,6 +49,95 @@ func TestJailJoin(t *testing.T) {
 	}
 	if got != filepath.Join(root, "outside") {
 		t.Fatalf("nested dot-dot should stay in jail, got %s", got)
+	}
+}
+
+func TestGuacdDrivePath(t *testing.T) {
+	s := &Server{d: Deps{DataDir: "/data"}}
+	got := s.guacdDrivePath(model.Settings{})
+	if got != "/data/shared" && !strings.HasSuffix(got, string(os.PathSeparator)+"shared") {
+		t.Fatalf("default guacd path %s", got)
+	}
+	if p := s.guacdDrivePath(model.Settings{GuacdDrivePath: "/drive"}); p != "/drive" {
+		t.Fatalf("override %s", p)
+	}
+}
+
+func TestSharedFilesDirDesktopIgnoresSetting(t *testing.T) {
+	dir := t.TempDir()
+	s := &Server{d: Deps{DataDir: dir, Mode: "desktop"}}
+	got := s.sharedFilesDir(model.Settings{SharedFilesDir: "/data/shared"})
+	want := filepath.Join(dir, "shared")
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+}
+
+func TestGuacdIsLoopback(t *testing.T) {
+	if !guacdIsLoopback("127.0.0.1:4822") || !guacdIsLoopback("localhost") || !guacdIsLoopback("[::1]:4822") {
+		t.Fatal("expected loopback")
+	}
+	if guacdIsLoopback("10.10.60.2:4822") || guacdIsLoopback("guacd:4822") {
+		t.Fatal("expected remote")
+	}
+}
+
+func TestRDPDrivePathUsesVantagedWhenRemoteGuacd(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sync/drive" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"drive_path": "/data/shared"})
+	}))
+	t.Cleanup(remote.Close)
+
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "vantage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.SaveSettings(map[string]string{
+		"sync_url":     remote.URL,
+		"sync_api_key": "k",
+		"guacd_addr":   "10.10.60.2:4822",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{d: Deps{Store: st, DataDir: dir, Mode: "desktop"}}
+	loaded, err := st.LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.rdpDrivePath(loaded); got != "/data/shared" {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestRDPDrivePathLocalGuacdStaysLocal(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "vantage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.SaveSettings(map[string]string{
+		"sync_url":     "http://vantaged.example",
+		"sync_api_key": "k",
+		"guacd_addr":   "127.0.0.1:4822",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{d: Deps{Store: st, DataDir: dir, Mode: "desktop"}}
+	loaded, err := st.LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.rdpDrivePath(loaded)
+	want, _ := filepath.Abs(filepath.Join(dir, "shared"))
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
 	}
 }
 

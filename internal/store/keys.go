@@ -287,6 +287,9 @@ func (s *Store) LoadSettings() (model.Settings, error) {
 	if v, ok, _ := s.Meta("shared_files_dir"); ok {
 		st.SharedFilesDir = v
 	}
+	if v, ok, _ := s.Meta("guacd_drive_path"); ok {
+		st.GuacdDrivePath = v
+	}
 	if v, ok, _ := s.Meta("terminal_theme"); ok {
 		st.TerminalTheme = v
 	}
@@ -337,7 +340,7 @@ func (s *Store) LoadSettings() (model.Settings, error) {
 
 func (s *Store) SaveSettings(patch map[string]string) error {
 	allowed := map[string]struct{}{
-		"listen_addr": {}, "guacd_addr": {}, "shared_files_dir": {}, "terminal_theme": {},
+		"listen_addr": {}, "guacd_addr": {}, "shared_files_dir": {}, "guacd_drive_path": {}, "terminal_theme": {},
 		"terminal_font_family": {}, "terminal_font_size": {},
 		"display_color_depth": {}, "display_width": {}, "display_height": {},
 		"accent_color": {}, "sync_url": {}, "sync_api_key": {}, "audit_log_enabled": {},

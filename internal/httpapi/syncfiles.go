@@ -13,6 +13,11 @@ import (
 
 const maxSyncFileBytes = 512 << 20
 
+func (s *Server) handleSyncDrive(w http.ResponseWriter, r *http.Request) {
+	st, _ := s.d.Store.LoadSettings()
+	writeJSON(w, 200, map[string]any{"drive_path": s.guacdDrivePath(st)})
+}
+
 func (s *Server) handleSyncFileList(w http.ResponseWriter, r *http.Request) {
 	root, err := s.sharedRoot()
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -13,14 +14,115 @@ import (
 	"sync"
 
 	"github.com/jdbnet/vantage/internal/model"
+	"github.com/jdbnet/vantage/internal/syncx"
 )
 
 func (s *Server) sharedFilesDir(st model.Settings) string {
+	if s.d.Mode == "desktop" {
+		return filepath.Join(s.d.DataDir, "shared")
+	}
 	dir := strings.TrimSpace(st.SharedFilesDir)
 	if dir == "" {
 		dir = filepath.Join(s.d.DataDir, "shared")
 	}
 	return dir
+}
+
+// guacdDrivePath is drive-path sent to guacd. It is a path in guacd's filesystem,
+// which is not the same as vantaged's unless they share a mount.
+func (s *Server) guacdDrivePath(st model.Settings) string {
+	if p := strings.TrimSpace(st.GuacdDrivePath); p != "" {
+		return p
+	}
+	abs, err := filepath.Abs(s.sharedFilesDir(st))
+	if err != nil {
+		return s.sharedFilesDir(st)
+	}
+	return abs
+}
+
+func guacdIsLoopback(addr string) bool {
+	host := strings.TrimSpace(addr)
+	if host == "" {
+		return false
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// rdpDrivePath is the path sent to guacd as drive-path.
+// Desktop with sync and a remote guacd uses vantaged's path so the guest sees
+// the same folder as the web UI. Local guacd keeps the OS data-dir shared folder.
+func (s *Server) rdpDrivePath(st model.Settings) string {
+	local := s.sharedFilesDir(st)
+	abs, err := filepath.Abs(local)
+	if err != nil {
+		abs = local
+	}
+	if s.d.Mode != "desktop" {
+		return s.guacdDrivePath(st)
+	}
+	if strings.TrimSpace(st.SyncURL) == "" || guacdIsLoopback(st.GuacdAddr) {
+		return abs
+	}
+	if s.d.Store == nil {
+		return abs
+	}
+	key, ok, _ := s.d.Store.SyncAPIKey()
+	if !ok || key == "" {
+		return abs
+	}
+	remote, err := syncx.FetchRemoteDrivePath(st.SyncURL, key)
+	if err != nil || remote == "" {
+		log.Printf("rdp drive: vantaged path unavailable (%v); using %s", err, abs)
+		return abs
+	}
+	return remote
+}
+
+func repairSharedAccess(root string) {
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return skipWalkErr(root, p, d, err)
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return nil
+		}
+		if rel != "." && ignoredSharedPath(rel) {
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d != nil && d.IsDir() {
+			_ = os.Chmod(p, 0o777)
+		} else if d != nil && d.Type().IsRegular() {
+			_ = os.Chmod(p, 0o666)
+		}
+		return nil
+	})
+}
+
+func logSharedDrive(local, guacdPath string) {
+	fi, err := os.Stat(local)
+	if err != nil {
+		log.Printf("rdp drive local=%s guacd=%s: %v", local, guacdPath, err)
+		return
+	}
+	perm := fi.Mode().Perm()
+	if perm&0o007 != 0o007 {
+		log.Printf("rdp drive local=%s perm=%s guacd=%s: directory is not world-writable; guacamole/guacd is UID 1000 and will not be able to list or write files", local, perm, guacdPath)
+		return
+	}
+	log.Printf("rdp drive local=%s perm=%s guacd=%s", local, perm, guacdPath)
 }
 
 // ensureSharedDir creates dir so both vantaged (UID 65532) and guacd (often UID 1000) can write.
@@ -53,6 +155,7 @@ func (s *Server) sharedHostRoot(hostID string) (string, error) {
 	if err := ensureSharedDir(abs); err != nil {
 		return "", err
 	}
+	repairSharedAccess(abs)
 	return abs, nil
 }
 
@@ -109,6 +212,7 @@ func (s *Server) sharedRoot() (string, error) {
 	if err := ensureSharedDir(abs); err != nil {
 		return "", err
 	}
+	repairSharedAccess(abs)
 	return abs, nil
 }
 

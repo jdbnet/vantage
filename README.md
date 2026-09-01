@@ -49,11 +49,15 @@ On first launch it copies itself to `~/.local/share/vantage/`, adds a **Vantage*
 2. Add identities (passwords or SSH keys) and hosts.
 3. For VNC or RDP, install guacd and set **guacd address** in Settings, usually `127.0.0.1:4822`.
 
-A typical guacd container on the same machine as the desktop app:
+A typical guacd container on the same machine as the desktop app. Bind-mount the desktop shared folder at the same path inside the container, because that is the path the desktop sends as the RDP drive:
 
 ```bash
-docker run -d --name guacd -p 4822:4822 guacamole/guacd:1.5.5
+docker run -d --name guacd -p 4822:4822 \
+  -v "$HOME/.local/share/vantage/shared:$HOME/.local/share/vantage/shared" \
+  guacamole/guacd:1.6.0
 ```
+
+If you instead point the desktop at vantaged's guacd, you do not need a local guacd. The guest then uses vantaged's shared folder (see below).
 
 ## Optional: vantaged server
 
@@ -66,9 +70,9 @@ docker run -d --name vantaged \
   ghcr.io/jdbnet/vantaged:latest
 ```
 
-Then open `http://127.0.0.1:7687` and create the operator account.
+Then open `http://127.0.0.1:7687` and create the operator account. That image has no shell and no `chmod`. Do not `docker exec` into it for filesystem tools.
 
-Example Compose file with guacd on the same network (set Settings **guacd address** to `guacd:4822` inside this stack):
+For RDP, run guacd on the same Docker network and set Settings **guacd address** to `guacd:4822`. The RDP drive is `/data/shared` inside both containers, so that folder must be mounted in **both**:
 
 ```yaml
 services:
@@ -77,26 +81,38 @@ services:
     ports:
       - "7687:7687"
     volumes:
-      - vantaged-data:/data
+      - ./data:/data
   guacd:
     image: guacamole/guacd:1.6.0
-    ports:
-      - "4822:4822"
-volumes:
-  vantaged-data:
+    volumes:
+      - ./data/shared:/data/shared
 ```
 
-A bind mount (`./data:/data`) is fine too. The image runs as UID 65532, so that host directory must be writable by that user:
+vantaged runs as UID 65532. guacamole/guacd runs as UID 1000. The host directory must be writable by vantaged, and the shared folder must be traversable and writable by both:
 
 ```bash
-mkdir -p data
+mkdir -p data/shared
 sudo chown 65532:65532 data
+chmod a+x data
+chmod -R a+rwX data/shared
 ```
 
-A named volume does this for you. If you bind-mount a directory owned by your login user, SQLite fails with `unable to open database file (14)`.
+Do not chmod the whole `data` tree world-writable (that is the SQLite vault). Only `data/shared` needs `a+rwX`. The vantaged image cannot run `chmod`; do it on the host, or `docker exec -u 0 <guacd-container> chmod -R a+rwX /data/shared`.
+
+A named volume for `/data` is fine instead of `./data`. Create `/data/shared` on first start, then fix permissions the same way. If you bind-mount a directory owned by your login user, SQLite fails with `unable to open database file (14)`.
+
+Leave **Drive path inside guacd** blank when the mounts match (`/data/shared` in both). The `Download` folder inside the drive is created by guacd for browser file transfer and is not synced.
 
 Images are tagged with the release version (`ghcr.io/jdbnet/vantaged:1.2.3`) and `latest`. Architectures: `linux/amd64` and `linux/arm64`.
 
 ## Sync desktop with vantaged
 
 On vantaged, create an API key with the `sync` scope. In the desktop app Settings, paste the vantaged URL and that API key. Hosts, folders, tags, identities, snippets, and known hosts replicate both ways (last write wins).
+
+Shared files sync into the desktop data folder:
+
+- Linux: `~/.local/share/vantage/shared`
+- Windows: `%LOCALAPPDATA%\vantage\shared`
+- macOS: `~/Library/Application Support/vantage/shared`
+
+There is no shared-folder setting on the desktop. If **guacd address** is this machine (`127.0.0.1`), RDP uses that local folder. If it is vantaged's guacd, RDP uses vantaged's `/data/shared`, so the guest matches the web UI.

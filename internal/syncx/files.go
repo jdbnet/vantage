@@ -48,12 +48,6 @@ func (c *Client) fileLoop() {
 }
 
 func (c *Client) localSharedDir() string {
-	st, err := c.st.LoadSettings()
-	if err == nil {
-		if d := strings.TrimSpace(st.SharedFilesDir); d != "" {
-			return d
-		}
-	}
 	return filepath.Join(c.dataDir, "shared")
 }
 
@@ -332,6 +326,30 @@ func fetchRemoteFiles(base, key string) ([]fileMeta, error) {
 		body.Files = []fileMeta{}
 	}
 	return body.Files, nil
+}
+
+func FetchRemoteDrivePath(base, key string) (string, error) {
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(base, "/")+"/api/sync/drive", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return "", httpStatusError("drive path", resp.StatusCode)
+	}
+	var body struct {
+		DrivePath string `json:"drive_path"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(body.DrivePath), nil
 }
 
 func contentURL(base, rel string) string {

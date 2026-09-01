@@ -66,6 +66,27 @@ func TestBuildConfigRDP(t *testing.T) {
 	}
 }
 
+func TestBuildConfigRDPDrive(t *testing.T) {
+	t.Parallel()
+	cfg := buildConfig(Params{
+		Protocol:    "rdp",
+		Hostname:    "pc.example",
+		Port:        3389,
+		EnableDrive: true,
+		DrivePath:   "/data/shared",
+		DriveName:   "Vantage",
+	})
+	if cfg.Parameters["enable-drive"] != "true" {
+		t.Fatalf("enable-drive=%q", cfg.Parameters["enable-drive"])
+	}
+	if cfg.Parameters["drive-path"] != "/data/shared" {
+		t.Fatalf("drive-path=%q", cfg.Parameters["drive-path"])
+	}
+	if cfg.Parameters["create-drive-path"] != "true" {
+		t.Fatalf("create-drive-path=%q", cfg.Parameters["create-drive-path"])
+	}
+}
+
 func TestBuildConfigVNCOmitsRDPFlags(t *testing.T) {
 	t.Parallel()
 	cfg := buildConfig(Params{Protocol: "vnc", Hostname: "vnc.example", Port: 5900})

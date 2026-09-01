@@ -755,6 +755,7 @@ export interface Settings {
   display_height: number;
   accent_color: string;
   shared_files_dir: string;
+  guacd_drive_path: string;
   sync_url: string;
   sync_api_key_set: boolean;
   audit_log_enabled: boolean;

@@ -373,19 +373,21 @@ func (s *Server) handleGuacWS(w http.ResponseWriter, r *http.Request) {
 		ColorDepth: st.DisplayColorDepth,
 	}
 	if proto == "rdp" {
-		drivePath := s.sharedFilesDir(st)
-		if err := ensureSharedDir(drivePath); err != nil {
+		local := s.sharedFilesDir(st)
+		if err := ensureSharedDir(local); err != nil {
 			sendErr("shared files directory: " + err.Error())
 			return
 		}
-		abs, err := filepath.Abs(drivePath)
+		abs, err := filepath.Abs(local)
 		if err != nil {
 			sendErr("shared files directory: " + err.Error())
 			return
 		}
+		repairSharedAccess(abs)
 		params.EnableDrive = true
-		params.DrivePath = abs
+		params.DrivePath = s.rdpDrivePath(st)
 		params.DriveName = "Vantage"
+		logSharedDrive(abs, params.DrivePath)
 	}
 	tunnel, err := guacx.Open(params)
 	if err != nil {

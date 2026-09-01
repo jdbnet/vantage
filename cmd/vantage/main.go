@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/jdbnet/vantage/internal/appcore"
 	"github.com/wailsapp/wails/v2"
@@ -55,6 +56,17 @@ func main() {
 func desktopDataDir() string {
 	if d := os.Getenv("VANTAGE_DATA_DIR"); d != "" {
 		return d
+	}
+	switch runtime.GOOS {
+	case "windows":
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			return filepath.Join(local, "vantage")
+		}
+	case "darwin":
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, "Library", "Application Support", "vantage")
+		}
 	}
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 		return filepath.Join(xdg, "vantage")

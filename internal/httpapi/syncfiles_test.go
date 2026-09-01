@@ -129,3 +129,30 @@ func TestSyncFileExcludesDownload(t *testing.T) {
 		t.Fatalf("put Download status %d body %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestHandleSyncDrive(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "vantage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.SaveSettings(map[string]string{"guacd_drive_path": "/data/shared"}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{d: Deps{Store: st, DataDir: dir}}
+	rec := httptest.NewRecorder()
+	s.handleSyncDrive(rec, httptest.NewRequest(http.MethodGet, "/api/sync/drive", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		DrivePath string `json:"drive_path"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.DrivePath != "/data/shared" {
+		t.Fatalf("drive_path %q", body.DrivePath)
+	}
+}
