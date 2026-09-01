@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/jdbnet/vantage/internal/model"
 )
@@ -26,7 +28,13 @@ func ensureSharedDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return err
 	}
-	return os.Chmod(dir, 0o777)
+	if err := os.Chmod(dir, 0o777); err != nil {
+		if st, stErr := os.Stat(dir); stErr == nil && st.IsDir() {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func ensureSharedFileMode(path string) error {
@@ -104,15 +112,52 @@ func (s *Server) sharedRoot() (string, error) {
 	return abs, nil
 }
 
+var skippedWalk sync.Map
+
+// ignoredSharedPath is the guacd RDP drive Download folder. It is created as
+// 0700 owned by guacd's UID, so vantaged cannot list it. Keep it off file sync.
+func ignoredSharedPath(rel string) bool {
+	slash := strings.Trim(filepath.ToSlash(rel), "/")
+	return slash == "Download" || strings.HasPrefix(slash, "Download/")
+}
+
+func skipIgnoredRel(rel string, d os.DirEntry) error {
+	if !ignoredSharedPath(rel) {
+		return nil
+	}
+	if d != nil && d.IsDir() {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+// skipWalkErr keeps listing the rest of the tree when a path is unreadable.
+func skipWalkErr(root, p string, d os.DirEntry, err error) error {
+	if p == root {
+		return err
+	}
+	if _, dup := skippedWalk.LoadOrStore(p, struct{}{}); !dup {
+		log.Printf("shared files: skip %s: %v", p, err)
+	}
+	if d != nil && d.IsDir() {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
 func listSharedTree(root string) ([]sharedFileMeta, error) {
 	var out []sharedFileMeta
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return skipWalkErr(root, p, d, err)
 		}
 		rel, err := filepath.Rel(root, p)
 		if err != nil || rel == "." {
+			_ = os.Chmod(p, 0o777)
 			return nil
+		}
+		if err := skipIgnoredRel(rel, d); err != nil || ignoredSharedPath(rel) {
+			return err
 		}
 		info, err := d.Info()
 		if err != nil {
@@ -123,6 +168,11 @@ func listSharedTree(root string) ([]sharedFileMeta, error) {
 		}
 		if !d.IsDir() && !info.Mode().IsRegular() {
 			return nil
+		}
+		if d.IsDir() {
+			_ = os.Chmod(p, 0o777)
+		} else {
+			_ = os.Chmod(p, 0o666)
 		}
 		out = append(out, sharedFileMeta{
 			Path:  filepath.ToSlash(rel),

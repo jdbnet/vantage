@@ -49,6 +49,67 @@ func TestWalkShared(t *testing.T) {
 	}
 }
 
+func TestWalkSharedSkipsUnreadableDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "ok.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	blocked := filepath.Join(root, "locked")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "secret.txt"), []byte("no"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o700) })
+
+	files, err := walkShared(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := indexFiles(files)
+	if _, ok := byPath["ok.txt"]; !ok {
+		t.Fatalf("missing ok.txt: %+v", files)
+	}
+	if _, ok := byPath["locked/secret.txt"]; ok {
+		t.Fatalf("should skip unreadable dir contents: %+v", files)
+	}
+}
+
+func TestWalkSharedSkipsDownload(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "ok.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "Download"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Download", "secret.txt"), []byte("no"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := walkShared(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := indexFiles(files)
+	if _, ok := byPath["ok.txt"]; !ok {
+		t.Fatalf("missing ok.txt: %+v", files)
+	}
+	if _, ok := byPath["Download"]; ok {
+		t.Fatalf("Download should be excluded from sync: %+v", files)
+	}
+	if _, ok := byPath["Download/secret.txt"]; ok {
+		t.Fatalf("Download contents should be excluded: %+v", files)
+	}
+}
+
 func TestReconcileSharedFilesUploadDownloadDelete(t *testing.T) {
 	remote := t.TempDir()
 	srv := httptest.NewServer(sharedFileStub(remote))

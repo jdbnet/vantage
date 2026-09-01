@@ -33,6 +33,10 @@ func (s *Server) handleSyncFileList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSyncFileGet(w http.ResponseWriter, r *http.Request) {
 	rel := r.URL.Query().Get("path")
+	if ignoredSharedPath(rel) {
+		writeErr(w, 400, "excluded from sync")
+		return
+	}
 	root, err := s.sharedRoot()
 	if err != nil {
 		writeErr(w, 500, err.Error())
@@ -62,6 +66,10 @@ func (s *Server) handleSyncFileGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSyncFilePut(w http.ResponseWriter, r *http.Request) {
 	rel := r.URL.Query().Get("path")
+	if ignoredSharedPath(rel) {
+		writeErr(w, 400, "excluded from sync")
+		return
+	}
 	root, err := s.sharedRoot()
 	if err != nil {
 		writeErr(w, 500, err.Error())
@@ -127,6 +135,10 @@ func (s *Server) handleSyncFilePut(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSyncFileDelete(w http.ResponseWriter, r *http.Request) {
 	rel := r.URL.Query().Get("path")
+	if ignoredSharedPath(rel) {
+		writeErr(w, 400, "excluded from sync")
+		return
+	}
 	root, err := s.sharedRoot()
 	if err != nil {
 		writeErr(w, 500, err.Error())

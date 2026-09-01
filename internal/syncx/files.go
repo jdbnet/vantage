@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jdbnet/vantage/internal/store"
@@ -105,6 +106,9 @@ func reconcileSharedFiles(st *store.Store, root, base, key string) error {
 	var uploads, downloads []fileMeta
 	var delLocal, delRemote []string
 	for p := range paths {
+		if ignoredSharedPath(p) {
+			continue
+		}
 		L, lok := localM[p]
 		R, rok := remoteM[p]
 		_, pok := prev[p]
@@ -213,15 +217,48 @@ func indexFiles(files []fileMeta) map[string]fileMeta {
 	return m
 }
 
+var skippedWalk sync.Map
+
+func ignoredSharedPath(rel string) bool {
+	slash := strings.Trim(filepath.ToSlash(rel), "/")
+	return slash == "Download" || strings.HasPrefix(slash, "Download/")
+}
+
+func skipIgnoredRel(rel string, d os.DirEntry) error {
+	if !ignoredSharedPath(rel) {
+		return nil
+	}
+	if d != nil && d.IsDir() {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+func skipWalkErr(root, p string, d os.DirEntry, err error) error {
+	if p == root {
+		return err
+	}
+	if _, dup := skippedWalk.LoadOrStore(p, struct{}{}); !dup {
+		log.Printf("sync files: skip %s: %v", p, err)
+	}
+	if d != nil && d.IsDir() {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
 func walkShared(root string) ([]fileMeta, error) {
 	var out []fileMeta
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return skipWalkErr(root, p, d, err)
 		}
 		rel, err := filepath.Rel(root, p)
 		if err != nil || rel == "." {
 			return nil
+		}
+		if err := skipIgnoredRel(rel, d); err != nil || ignoredSharedPath(rel) {
+			return err
 		}
 		info, err := d.Info()
 		if err != nil {

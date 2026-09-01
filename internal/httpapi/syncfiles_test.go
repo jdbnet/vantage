@@ -85,3 +85,47 @@ func TestSyncFilePutGetListDelete(t *testing.T) {
 		t.Fatalf("expected file gone, err=%v", err)
 	}
 }
+
+func TestSyncFileExcludesDownload(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "vantage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	s := &Server{d: Deps{Store: st, DataDir: dir}}
+	if err := os.MkdirAll(filepath.Join(dir, "shared", "Download"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shared", "Download", "secret.txt"), []byte("no"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shared", "ok.txt"), []byte("yes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	list := httptest.NewRequest(http.MethodGet, "/api/sync/files", nil)
+	rec := httptest.NewRecorder()
+	s.handleSyncFileList(rec, list)
+	if rec.Code != 200 {
+		t.Fatalf("list status %d body %s", rec.Code, rec.Body.String())
+	}
+	var listed struct {
+		Files []sharedFileMeta `json:"files"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range listed.Files {
+		if ignoredSharedPath(f.Path) {
+			t.Fatalf("Download leaked into sync list: %+v", listed.Files)
+		}
+	}
+
+	put := httptest.NewRequest(http.MethodPut, "/api/sync/files/content?path=Download/x.txt", bytes.NewReader([]byte("x")))
+	rec = httptest.NewRecorder()
+	s.handleSyncFilePut(rec, put)
+	if rec.Code != 400 {
+		t.Fatalf("put Download status %d body %s", rec.Code, rec.Body.String())
+	}
+}
