@@ -85,6 +85,10 @@ jobs:
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Set Wails product version
+        shell: bash
+        run: bash scripts/set-version.sh
+
       - name: Build frontend
         working-directory: frontend
         run: npm ci --no-audit --no-fund && npm run build
