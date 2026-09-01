@@ -51,6 +51,7 @@ type HostKeyPrompt = {
 
 const termEl = ref<HTMLElement | null>(null);
 const guacEl = ref<HTMLElement | null>(null);
+const guacClipboardEl = ref<HTMLTextAreaElement | null>(null);
 const sessionPane = ref<HTMLElement | null>(null);
 const searchInput = ref<HTMLInputElement | null>(null);
 const status = ref("Connecting…");
@@ -78,6 +79,12 @@ let guacResizeTimer: number | null = null;
 let lastGuacRemoteW = 0;
 let lastGuacRemoteH = 0;
 let fullscreenHandler: (() => void) | null = null;
+let guacCtrlDown = false;
+let guacMetaDown = false;
+let guacPastePending = false;
+let guacPasteKeysym = 0x76;
+let guacPasteFallbackTimer: number | null = null;
+let lastPushedClipboard = "";
 let sessionAlive = true;
 
 function clearPingInterval() {
@@ -352,6 +359,7 @@ function guacDisplayFocused(): boolean {
 
 function isEditableTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
+  if (el === guacClipboardEl.value) return false;
   const tag = el.tagName;
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
 }
@@ -362,12 +370,94 @@ function armGuacInput() {
   wrap?.focus({ preventScroll: true });
 }
 
+const GUAC_CTRL_L = 0xffe3;
+const GUAC_CTRL_R = 0xffe4;
+const GUAC_META_L = 0xffe7;
+const GUAC_META_R = 0xffe8;
+const GUAC_SUPER_L = 0xffeb;
+const GUAC_SUPER_R = 0xffec;
+const GUAC_KEY_V = 0x76;
+const GUAC_KEY_V_SHIFT = 0x56;
+
+function isGuacCtrl(keysym: number): boolean {
+  return keysym === GUAC_CTRL_L || keysym === GUAC_CTRL_R;
+}
+
+function isGuacMeta(keysym: number): boolean {
+  return (
+    keysym === GUAC_META_L ||
+    keysym === GUAC_META_R ||
+    keysym === GUAC_SUPER_L ||
+    keysym === GUAC_SUPER_R
+  );
+}
+
+function isGuacV(keysym: number): boolean {
+  return keysym === GUAC_KEY_V || keysym === GUAC_KEY_V_SHIFT;
+}
+
 function sendGuacClipboard(text: string) {
   if (!guacClient || text.length > CLIPBOARD_MAX) return;
+  if (text === lastPushedClipboard) return;
+  lastPushedClipboard = text;
   const stream = guacClient.createClipboardStream("text/plain");
   const writer = new Guacamole.StringWriter(stream);
   writer.sendText(text);
   writer.sendEnd();
+}
+
+function sendGuacVKey(keysym: number) {
+  guacClient?.sendKeyEvent(1, keysym);
+  guacClient?.sendKeyEvent(0, keysym);
+}
+
+function clearGuacPasteFallback() {
+  if (guacPasteFallbackTimer) {
+    window.clearTimeout(guacPasteFallbackTimer);
+    guacPasteFallbackTimer = null;
+  }
+}
+
+function finishGuacPaste(text: string, keysym: number) {
+  clearGuacPasteFallback();
+  guacPastePending = false;
+  if (text && text.length <= CLIPBOARD_MAX) {
+    sendGuacClipboard(text);
+  }
+  window.setTimeout(() => {
+    sendGuacVKey(keysym);
+    guacEl.value?.focus({ preventScroll: true });
+  }, 30);
+}
+
+function armGuacClipboardCapture() {
+  const el = guacClipboardEl.value;
+  if (!el) return;
+  el.value = "";
+  el.focus({ preventScroll: true });
+}
+
+function scheduleGuacPasteFallback(keysym: number) {
+  clearGuacPasteFallback();
+  guacPasteFallbackTimer = window.setTimeout(() => {
+    guacPasteFallbackTimer = null;
+    if (!guacPastePending) return;
+    const dumped = guacClipboardEl.value?.value || "";
+    finishGuacPaste(dumped, keysym);
+  }, 80);
+}
+
+function onGuacPaste(ev: ClipboardEvent) {
+  if (!guacDisplayFocused() || isEditableTarget(ev.target)) return;
+  const text = ev.clipboardData?.getData("text/plain") || "";
+  ev.preventDefault();
+  if (guacPastePending) {
+    finishGuacPaste(text, guacPasteKeysym);
+    return;
+  }
+  if (text && text.length <= CLIPBOARD_MAX) {
+    sendGuacClipboard(text);
+  }
 }
 
 function disposeGuacInput() {
@@ -376,8 +466,9 @@ function disposeGuacInput() {
     removeGuacKeySink(guacKeySink);
     guacKeySink = null;
   }
-  if (guacPasteHandler && wrap) {
-    wrap.removeEventListener("paste", guacPasteHandler);
+  if (guacPasteHandler) {
+    document.removeEventListener("paste", guacPasteHandler, true);
+    wrap?.removeEventListener("paste", guacPasteHandler);
   }
   guacPasteHandler = null;
   if (guacFocusHandler && wrap) {
@@ -388,6 +479,11 @@ function disposeGuacInput() {
     document.removeEventListener("mousedown", guacOutsideClick, true);
     guacOutsideClick = null;
   }
+  clearGuacPasteFallback();
+  guacPastePending = false;
+  guacCtrlDown = false;
+  guacMetaDown = false;
+  lastPushedClipboard = "";
   guacInputActive = false;
 }
 
@@ -401,7 +497,7 @@ function attachGuacInput(displayEl: HTMLElement) {
   }
   if (!guacOutsideClick) {
     guacOutsideClick = (ev: MouseEvent) => {
-      if (!wrap.contains(ev.target as Node)) {
+      if (!wrap.contains(ev.target as Node) && ev.target !== guacClipboardEl.value) {
         guacInputActive = false;
       }
     };
@@ -411,23 +507,37 @@ function attachGuacInput(displayEl: HTMLElement) {
     guacKeySink = {
       isActive: () => guacDisplayFocused() && !isEditableTarget(document.activeElement),
       keydown: (keysym: number) => {
+        if (isGuacCtrl(keysym)) {
+          guacCtrlDown = true;
+          guacClient?.sendKeyEvent(1, keysym);
+          return;
+        }
+        if (isGuacMeta(keysym)) {
+          guacMetaDown = true;
+          guacClient?.sendKeyEvent(1, keysym);
+          return;
+        }
+        if (isGuacV(keysym) && (guacCtrlDown || guacMetaDown)) {
+          guacPastePending = true;
+          guacPasteKeysym = keysym;
+          armGuacClipboardCapture();
+          scheduleGuacPasteFallback(keysym);
+          return true;
+        }
         guacClient?.sendKeyEvent(1, keysym);
       },
       keyup: (keysym: number) => {
+        if (isGuacCtrl(keysym)) guacCtrlDown = false;
+        if (isGuacMeta(keysym)) guacMetaDown = false;
+        if (isGuacV(keysym) && guacPastePending) return;
         guacClient?.sendKeyEvent(0, keysym);
       },
     };
     addGuacKeySink(guacKeySink);
   }
   if (!guacPasteHandler) {
-    guacPasteHandler = (ev: ClipboardEvent) => {
-      if (!guacDisplayFocused()) return;
-      const text = ev.clipboardData?.getData("text/plain") || "";
-      if (!text || text.length > CLIPBOARD_MAX) return;
-      ev.preventDefault();
-      sendGuacClipboard(text);
-    };
-    wrap.addEventListener("paste", guacPasteHandler);
+    guacPasteHandler = onGuacPaste;
+    document.addEventListener("paste", guacPasteHandler, true);
   }
   if (guacClient) {
     guacClient.onclipboard = (stream: unknown, mimetype: string) => {
@@ -439,6 +549,7 @@ function attachGuacInput(displayEl: HTMLElement) {
       };
       reader.onend = () => {
         if (!text || text.length > CLIPBOARD_MAX) return;
+        lastPushedClipboard = text;
         void navigator.clipboard.writeText(text).catch(() => {
           /* ignore */
         });
@@ -781,10 +892,22 @@ watch(
       />
       <div
         v-else
-        ref="guacEl"
-        tabindex="0"
-        class="flex h-full min-h-[320px] items-center justify-center overflow-hidden rounded-lg border border-slate-800 bg-black outline-none"
-      />
+        class="relative flex h-full min-h-[320px] items-center justify-center overflow-hidden rounded-lg border border-slate-800 bg-black"
+      >
+        <div
+          ref="guacEl"
+          tabindex="0"
+          class="flex h-full w-full items-center justify-center overflow-hidden outline-none"
+        />
+        <textarea
+          ref="guacClipboardEl"
+          class="pointer-events-none absolute h-px w-px opacity-0"
+          tabindex="-1"
+          aria-hidden="true"
+          autocomplete="off"
+          @paste="onGuacPaste"
+        />
+      </div>
     </div>
     <template v-if="showSftp && protocol === 'ssh'">
       <div

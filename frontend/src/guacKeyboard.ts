@@ -2,7 +2,8 @@ import Guacamole from "guacamole-common-js";
 
 export type GuacKeySink = {
   isActive: () => boolean;
-  keydown: (keysym: number) => void;
+  /** Return true to allow the browser default (needed for Ctrl/Cmd+V paste). */
+  keydown: (keysym: number) => boolean | void;
   keyup: (keysym: number) => void;
 };
 
@@ -15,8 +16,7 @@ function ensureKeyboard() {
   keyboard.onkeydown = (keysym: number) => {
     for (const s of sinks) {
       if (s.isActive()) {
-        s.keydown(keysym);
-        return false;
+        return s.keydown(keysym) === true;
       }
     }
     return true;
