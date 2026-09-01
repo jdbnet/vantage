@@ -3,6 +3,7 @@ package appcore
 import (
 	"crypto/rand"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -68,12 +69,18 @@ func Open(dataDir, mode, listen string, cookieSecure bool) (*Core, error) {
 			c.Listen = ":7687"
 		}
 	}
+	vault := "locked"
+	if c.box != nil {
+		vault = "unlocked"
+	}
+	log.Printf("core ready mode=%s listen=%s data=%s vault=%s", c.Mode, c.Listen, dataDir, vault)
 	return c, nil
 }
 
 func (c *Core) Close() error {
 	var err error
 	c.closed.Do(func() {
+		log.Printf("core closing mode=%s", c.Mode)
 		if c.syncClient != nil {
 			c.syncClient.Stop()
 		}

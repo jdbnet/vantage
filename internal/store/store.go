@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,9 +55,13 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	s.replicaID = id
-	if err := s.BackfillChangeLog(); err != nil {
+	n, err := s.BackfillChangeLog()
+	if err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if n > 0 {
+		log.Printf("change log: backfilled %d missing rows", n)
 	}
 	return s, nil
 }
@@ -159,14 +164,33 @@ func newer(a, b string) bool {
 	return strings.Compare(a, b) > 0
 }
 
+const DefaultChangePage = 500
+
 func (s *Store) ChangesSince(seq int64) ([]model.ChangeOp, int64, error) {
-	if err := s.BackfillChangeLog(); err != nil {
-		return nil, 0, err
+	return s.queryChanges(seq, "", 0)
+}
+
+func (s *Store) ChangesSinceLimit(seq int64, limit int) ([]model.ChangeOp, int64, error) {
+	return s.queryChanges(seq, "", limit)
+}
+
+func (s *Store) LocalChangesSince(seq int64, limit int) ([]model.ChangeOp, int64, error) {
+	return s.queryChanges(seq, s.replicaID, limit)
+}
+
+func (s *Store) queryChanges(seq int64, origin string, limit int) ([]model.ChangeOp, int64, error) {
+	q := `SELECT seq, entity, entity_id, op, row_updated_at, origin_replica_id, payload FROM change_log WHERE seq > ?`
+	args := []any{seq}
+	if origin != "" {
+		q += ` AND origin_replica_id = ?`
+		args = append(args, origin)
 	}
-	rows, err := s.db.Query(
-		`SELECT seq, entity, entity_id, op, row_updated_at, origin_replica_id, payload FROM change_log WHERE seq > ? ORDER BY seq`,
-		seq,
-	)
+	q += ` ORDER BY seq`
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -186,10 +210,13 @@ func (s *Store) ChangesSince(seq int64) ([]model.ChangeOp, int64, error) {
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
-	if head == seq {
-		err := s.db.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM change_log`).Scan(&head)
+	if len(out) == 0 || (limit <= 0 || len(out) < limit) {
+		max, err := s.HeadSeq()
 		if err != nil {
 			return nil, 0, err
+		}
+		if max > head {
+			head = max
 		}
 	}
 	return out, head, nil

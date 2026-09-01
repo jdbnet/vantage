@@ -50,9 +50,15 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := s.upgr.Upgrade(w, r, nil)
 	if err != nil {
+		log.Printf("ssh ws upgrade host=%s from %s: %v", hostID, reqIP(r), err)
 		return
 	}
 	defer conn.Close()
+	t0 := time.Now()
+	log.Printf("ssh ws start host=%s from %s", hostID, reqIP(r))
+	defer func() {
+		log.Printf("ssh ws end host=%s from %s after %s", hostID, reqIP(r), time.Since(t0).Round(time.Millisecond))
+	}()
 
 	var wsMu sync.Mutex
 	writeTerm := func(p []byte) {
@@ -341,6 +347,11 @@ func (s *Server) handleGuacWS(w http.ResponseWriter, r *http.Request) {
 		sendErr("host is not vnc/rdp")
 		return
 	}
+	t0 := time.Now()
+	log.Printf("%s ws start host=%s %s:%d from %s", proto, hostID, rec.Host.Hostname, rec.Host.Port, reqIP(r))
+	defer func() {
+		log.Printf("%s ws end host=%s from %s after %s", proto, hostID, reqIP(r), time.Since(t0).Round(time.Millisecond))
+	}()
 	width := st.DisplayWidth
 	height := st.DisplayHeight
 	if n, _ := strconvAtoi(r.URL.Query().Get("width")); n >= 320 && n <= 7680 {
@@ -433,6 +444,7 @@ func pipeGuac(ws *websocket.Conn, tunnel guac.Tunnel) {
 }
 
 func (s *Server) handleSyncSnapshot(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	snap, err := s.d.Store.Snapshot()
 	if err != nil {
 		writeErr(w, 500, err.Error())
@@ -442,12 +454,14 @@ func (s *Server) handleSyncSnapshot(w http.ResponseWriter, r *http.Request) {
 		snap["tags"] = tags
 	}
 	s.rewriteSnapshotSecrets(snap, true)
+	log.Printf("sync snapshot in %s", time.Since(start).Round(time.Millisecond))
 	writeJSON(w, 200, snap)
 }
 
 func (s *Server) handleSyncChanges(w http.ResponseWriter, r *http.Request) {
 	since, _ := strconvAtoi(r.URL.Query().Get("since"))
-	ops, head, err := s.d.Store.ChangesSince(int64(since))
+	start := time.Now()
+	ops, head, err := s.d.Store.ChangesSinceLimit(int64(since), store.DefaultChangePage)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -456,7 +470,11 @@ func (s *Server) handleSyncChanges(w http.ResponseWriter, r *http.Request) {
 	for _, op := range ops {
 		out = append(out, s.rewriteOpSecrets(op, true))
 	}
-	writeJSON(w, 200, map[string]any{"ops": out, "head": head})
+	more := len(ops) == store.DefaultChangePage
+	if d := time.Since(start); d > 200*time.Millisecond || len(out) > 50 {
+		log.Printf("sync changes since=%d ops=%d head=%d more=%t in %s", since, len(out), head, more, d.Round(time.Millisecond))
+	}
+	writeJSON(w, 200, map[string]any{"ops": out, "head": head, "more": more})
 }
 
 func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
@@ -483,9 +501,15 @@ func (s *Server) handleSyncWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := s.upgr.Upgrade(w, r, nil)
 	if err != nil {
+		log.Printf("sync ws upgrade from %s: %v", reqIP(r), err)
 		return
 	}
 	defer conn.Close()
+	t0 := time.Now()
+	log.Printf("sync ws start from %s", reqIP(r))
+	defer func() {
+		log.Printf("sync ws end from %s after %s", reqIP(r), time.Since(t0).Round(time.Millisecond))
+	}()
 	var last int64
 	for {
 		_, data, err := conn.ReadMessage()
@@ -502,12 +526,17 @@ func (s *Server) handleSyncWS(w http.ResponseWriter, r *http.Request) {
 		}
 		switch msg.Type {
 		case "hello":
-			ops, head, _ := s.d.Store.ChangesSince(msg.Since)
+			ops, head, err := s.d.Store.ChangesSinceLimit(msg.Since, store.DefaultChangePage)
+			if err != nil {
+				log.Printf("sync ws hello: %v", err)
+				return
+			}
 			rewritten := make([]model.ChangeOp, 0, len(ops))
 			for _, op := range ops {
 				rewritten = append(rewritten, s.rewriteOpSecrets(op, true))
 			}
-			_ = conn.WriteJSON(map[string]any{"type": "ops", "ops": rewritten, "head": head})
+			more := len(ops) == store.DefaultChangePage
+			_ = conn.WriteJSON(map[string]any{"type": "ops", "ops": rewritten, "head": head, "more": more})
 			last = head
 		case "push":
 			for i := range msg.Ops {
@@ -518,15 +547,23 @@ func (s *Server) handleSyncWS(w http.ResponseWriter, r *http.Request) {
 			}
 			_ = conn.WriteJSON(map[string]any{"type": "ack"})
 		case "poll":
-			ops, head, _ := s.d.Store.ChangesSince(last)
-			if len(ops) > 0 {
-				rewritten := make([]model.ChangeOp, 0, len(ops))
-				for _, op := range ops {
-					rewritten = append(rewritten, s.rewriteOpSecrets(op, true))
-				}
-				_ = conn.WriteJSON(map[string]any{"type": "ops", "ops": rewritten, "head": head})
-				last = head
+			ops, head, err := s.d.Store.ChangesSinceLimit(last, store.DefaultChangePage)
+			if err != nil {
+				log.Printf("sync ws poll: %v", err)
+				return
 			}
+			if len(ops) == 0 {
+				_ = conn.WriteJSON(map[string]any{"type": "idle", "head": head})
+				last = head
+				break
+			}
+			rewritten := make([]model.ChangeOp, 0, len(ops))
+			for _, op := range ops {
+				rewritten = append(rewritten, s.rewriteOpSecrets(op, true))
+			}
+			more := len(ops) == store.DefaultChangePage
+			_ = conn.WriteJSON(map[string]any{"type": "ops", "ops": rewritten, "head": head, "more": more})
+			last = head
 		}
 	}
 }

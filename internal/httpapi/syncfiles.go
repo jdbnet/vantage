@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,10 +19,14 @@ func (s *Server) handleSyncFileList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	start := time.Now()
 	files, err := listSharedTree(root)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
+	}
+	if d := time.Since(start); d > 200*time.Millisecond || len(files) > 200 {
+		log.Printf("sync files list count=%d in %s", len(files), d.Round(time.Millisecond))
 	}
 	writeJSON(w, 200, map[string]any{"files": files})
 }

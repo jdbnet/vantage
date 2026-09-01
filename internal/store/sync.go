@@ -83,166 +83,138 @@ func (s *Store) ApplyRemoteOps(ops []model.ChangeOp) error {
 	return nil
 }
 
-func (s *Store) BackfillChangeLog() error {
+func (s *Store) BackfillChangeLog() (int, error) {
 	missing, err := s.missingChangeLogCount()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if missing == 0 {
-		return nil
+		return 0, nil
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	folders, err := s.ListFolders()
-	if err != nil {
-		return err
-	}
-	sortFolderRecordsParentsFirst(folders)
-	for _, f := range folders {
-		ok, err := changeLogHasTx(tx, "folder", f.ID)
+	added := 0
+	add := func(entity, id, ts string, payload map[string]any) error {
+		ok, err := changeLogHasTx(tx, entity, id)
 		if err != nil {
 			return err
 		}
 		if ok {
-			continue
+			return nil
 		}
+		if err := s.appendLog(tx, entity, id, "upsert", ts, payload); err != nil {
+			return err
+		}
+		added++
+		return nil
+	}
+
+	folders, err := s.ListFolders()
+	if err != nil {
+		return 0, err
+	}
+	sortFolderRecordsParentsFirst(folders)
+	for _, f := range folders {
 		ts := coalesce(f.UpdatedAt, now())
-		payload := map[string]any{
+		if err := add("folder", f.ID, ts, map[string]any{
 			"id": f.ID, "parent_id": f.ParentID, "label": f.Label,
 			"created_at": f.CreatedAt, "updated_at": ts,
-		}
-		if err := s.appendLog(tx, "folder", f.ID, "upsert", ts, payload); err != nil {
-			return err
+		}); err != nil {
+			return 0, err
 		}
 	}
 
 	idents, err := s.ListIdentities()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, i := range idents {
-		ok, err := changeLogHasTx(tx, "identity", i.ID)
-		if err != nil {
-			return err
-		}
-		if ok {
-			continue
-		}
 		rec, err := s.GetIdentity(i.ID)
 		if err != nil {
 			continue
 		}
 		ts := coalesce(i.UpdatedAt, now())
-		payload := map[string]any{
+		if err := add("identity", i.ID, ts, map[string]any{
 			"id": i.ID, "label": i.Label, "auth_type": i.AuthType,
 			"encrypted_blob": rec.Blob, "encrypted_key_passphrase": rec.Passphrase,
 			"created_at": i.CreatedAt, "updated_at": ts,
-		}
-		if err := s.appendLog(tx, "identity", i.ID, "upsert", ts, payload); err != nil {
-			return err
+		}); err != nil {
+			return 0, err
 		}
 	}
 
 	tags, err := s.ListTagRecords()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, t := range tags {
-		ok, err := changeLogHasTx(tx, "tag", t.ID)
-		if err != nil {
-			return err
-		}
-		if ok {
-			continue
-		}
 		ts := coalesce(t.UpdatedAt, now())
-		payload := map[string]any{
+		if err := add("tag", t.ID, ts, map[string]any{
 			"id": t.ID, "name": t.Name, "created_at": t.CreatedAt, "updated_at": ts,
-		}
-		if err := s.appendLog(tx, "tag", t.ID, "upsert", ts, payload); err != nil {
-			return err
+		}); err != nil {
+			return 0, err
 		}
 	}
 
 	hosts, err := s.ListHosts()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, h := range hosts {
-		ok, err := changeLogHasTx(tx, "host", h.ID)
-		if err != nil {
-			return err
-		}
-		if ok {
-			continue
-		}
 		rec, err := s.GetHostRecord(h.ID)
 		if err != nil {
 			continue
 		}
 		ts := coalesce(h.UpdatedAt, now())
-		payload := map[string]any{
+		if err := add("host", h.ID, ts, map[string]any{
 			"id": h.ID, "folder_id": h.FolderID, "label": h.Label, "hostname": h.Hostname, "port": h.Port,
 			"protocol": h.Protocol, "identity_id": h.IdentityID, "jump_host_id": h.JumpHostID,
-			"inline_identity_auth_type": rec.InlineAuthType, "inline_identity_encrypted_blob": rec.InlineBlob,
+			"inline_identity_encrypted_blob":           rec.InlineBlob,
+			"inline_identity_auth_type":                rec.InlineAuthType,
 			"inline_identity_encrypted_key_passphrase": rec.InlinePassphrase, "tags": h.Tags,
 			"created_at": h.CreatedAt, "updated_at": ts,
-		}
-		if err := s.appendLog(tx, "host", h.ID, "upsert", ts, payload); err != nil {
-			return err
+		}); err != nil {
+			return 0, err
 		}
 	}
 
 	snips, err := s.ListSnippets()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, sn := range snips {
-		ok, err := changeLogHasTx(tx, "snippet", sn.ID)
-		if err != nil {
-			return err
-		}
-		if ok {
-			continue
-		}
 		ts := coalesce(sn.UpdatedAt, now())
-		payload := map[string]any{
+		if err := add("snippet", sn.ID, ts, map[string]any{
 			"id": sn.ID, "label": sn.Label, "command": sn.Command,
 			"created_at": sn.CreatedAt, "updated_at": ts,
-		}
-		if err := s.appendLog(tx, "snippet", sn.ID, "upsert", ts, payload); err != nil {
-			return err
+		}); err != nil {
+			return 0, err
 		}
 	}
 
 	known, err := s.ListKnownHosts()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, k := range known {
-		ok, err := changeLogHasTx(tx, "known_host", k.ID)
-		if err != nil {
-			return err
-		}
-		if ok {
-			continue
-		}
 		ts := coalesce(k.UpdatedAt, now())
-		payload := map[string]any{
+		if err := add("known_host", k.ID, ts, map[string]any{
 			"id": k.ID, "hostname": k.Hostname, "port": k.Port, "key_type": k.KeyType,
 			"fingerprint": k.Fingerprint, "public_key": k.PublicKey,
 			"created_at": k.CreatedAt, "updated_at": ts,
-		}
-		if err := s.appendLog(tx, "known_host", k.ID, "upsert", ts, payload); err != nil {
-			return err
+		}); err != nil {
+			return 0, err
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return added, nil
 }
 
 func changeLogHasTx(tx *sql.Tx, entity, id string) (bool, error) {

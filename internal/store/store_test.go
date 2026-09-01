@@ -313,7 +313,7 @@ func TestBackfillChangeLogFolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.BackfillChangeLog(); err != nil {
+	if _, err := a.BackfillChangeLog(); err != nil {
 		t.Fatal(err)
 	}
 	ops, _, err := a.ChangesSince(0)
@@ -345,6 +345,34 @@ func TestBackfillChangeLogFolders(t *testing.T) {
 	}
 	if len(folders) != 1 || folders[0].Label != "orphaned" {
 		t.Fatalf("folders %+v", folders)
+	}
+}
+
+func TestChangesSinceLimit(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "vantage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := 0; i < 5; i++ {
+		if _, err := s.CreateSnippet("s"+string(rune('a'+i)), "echo"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page1, head1, err := s.ChangesSinceLimit(0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 2 {
+		t.Fatalf("page1 %d", len(page1))
+	}
+	page2, _, err := s.ChangesSinceLimit(head1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page2) < 3 {
+		t.Fatalf("page2 %d", len(page2))
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -61,7 +62,7 @@ func StartClient(st *store.Store, boxFn func() *cryptox.Box, dataDir string) *Cl
 		stop:         make(chan struct{}),
 		kick:         make(chan struct{}, 1),
 		fileKick:     make(chan struct{}, 1),
-		needSnapshot: true,
+		needSnapshot: false,
 	}
 	go c.loop()
 	go c.fileLoop()
@@ -85,6 +86,9 @@ func (c *Client) Kick() {
 	c.lastPush = 0
 	c.needSnapshot = true
 	c.mu.Unlock()
+	if c.st != nil {
+		_ = c.st.SetMeta(syncPullHeadKey, "0")
+	}
 	c.closeWS()
 	select {
 	case c.kick <- struct{}{}:
@@ -262,8 +266,10 @@ func httpStatusError(op string, status int) error {
 	return fmt.Errorf("%s: HTTP %d", op, status)
 }
 
+const syncPullHeadKey = "sync_pull_head"
+
 func pushLocal(st *store.Store, box *cryptox.Box, base, key string, last *int64) error {
-	ops, head, err := st.ChangesSince(*last)
+	ops, head, err := st.LocalChangesSince(*last, store.DefaultChangePage)
 	if err != nil {
 		return err
 	}
@@ -290,31 +296,49 @@ func pushLocal(st *store.Store, box *cryptox.Box, base, key string, last *int64)
 	if resp.StatusCode >= 300 {
 		return httpStatusError("push", resp.StatusCode)
 	}
-	*last = head
+	*last = ops[len(ops)-1].Seq
 	return nil
 }
 
 func pullRemote(st *store.Store, box *cryptox.Box, base, key string) error {
-	req, err := http.NewRequest(http.MethodGet, base+"/api/sync/changes?since=0", nil)
-	if err != nil {
-		return err
+	since := loadPullHead(st)
+	for page := 0; page < 64; page++ {
+		req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/sync/changes?since=%d", base, since), nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+key)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		var body struct {
+			Ops  []model.ChangeOp `json:"ops"`
+			Head int64            `json:"head"`
+			More bool             `json:"more"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&body)
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return httpStatusError("pull", resp.StatusCode)
+		}
+		if err != nil {
+			return err
+		}
+		if err := applyPulledOps(st, box, body.Ops); err != nil {
+			return err
+		}
+		if body.Head > since {
+			since = body.Head
+		}
+		if err := savePullHead(st, since); err != nil {
+			return err
+		}
+		if !body.More || len(body.Ops) == 0 {
+			return nil
+		}
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return httpStatusError("pull", resp.StatusCode)
-	}
-	var body struct {
-		Ops []model.ChangeOp `json:"ops"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return err
-	}
-	return applyPulledOps(st, box, body.Ops)
+	return nil
 }
 
 func applyPulledOps(st *store.Store, box *cryptox.Box, ops []model.ChangeOp) error {
@@ -440,6 +464,28 @@ func isHTTPStatus(err error, status int) bool {
 	return strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", status))
 }
 
+func loadPullHead(st *store.Store) int64 {
+	if st == nil {
+		return 0
+	}
+	v, ok, err := st.Meta(syncPullHeadKey)
+	if err != nil || !ok {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+func savePullHead(st *store.Store, head int64) error {
+	if st == nil {
+		return nil
+	}
+	return st.SetMeta(syncPullHeadKey, strconv.FormatInt(head, 10))
+}
+
 func (c *Client) connectWS() {
 	settings, err := c.st.LoadSettings()
 	if err != nil || settings.SyncURL == "" {
@@ -471,7 +517,8 @@ func (c *Client) connectWS() {
 	}
 	c.setWS(conn)
 	defer c.closeWS()
-	if err := conn.WriteJSON(map[string]any{"type": "hello", "since": 0}); err != nil {
+	since := loadPullHead(c.st)
+	if err := conn.WriteJSON(map[string]any{"type": "hello", "since": since}); err != nil {
 		c.setError(err)
 		return
 	}
@@ -481,7 +528,7 @@ func (c *Client) connectWS() {
 			return
 		default:
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 		_, data, err := conn.ReadMessage()
 		if err != nil {
 			return
@@ -489,9 +536,14 @@ func (c *Client) connectWS() {
 		var msg struct {
 			Type string           `json:"type"`
 			Ops  []model.ChangeOp `json:"ops"`
+			Head int64            `json:"head"`
+			More bool             `json:"more"`
 		}
 		if json.Unmarshal(data, &msg) != nil {
 			continue
+		}
+		if msg.Head > 0 {
+			_ = savePullHead(c.st, msg.Head)
 		}
 		if msg.Type == "ops" {
 			if err := applyPulledOps(c.st, box, msg.Ops); err != nil {
@@ -501,8 +553,19 @@ func (c *Client) connectWS() {
 			if len(msg.Ops) > 0 {
 				c.setSuccess()
 			}
+			if msg.More {
+				_ = conn.WriteJSON(map[string]any{"type": "poll"})
+				continue
+			}
 		}
-		_ = conn.WriteJSON(map[string]any{"type": "poll"})
+		select {
+		case <-c.stop:
+			return
+		case <-time.After(2 * time.Second):
+		}
+		if err := conn.WriteJSON(map[string]any{"type": "poll"}); err != nil {
+			return
+		}
 	}
 }
 

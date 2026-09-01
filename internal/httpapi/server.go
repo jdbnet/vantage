@@ -153,7 +153,7 @@ func New(d Deps) http.Handler {
 		_ = f.Close()
 		fileServer.ServeHTTP(w, r)
 	})
-	return mux
+	return s.withLogs(mux)
 }
 
 type ctxKey int
@@ -235,6 +235,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
+	if status >= 500 {
+		log.Printf("error %d: %s", status, msg)
+	}
 	writeJSON(w, status, map[string]any{"ok": false, "error": msg})
 }
 
@@ -265,6 +268,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.d.Setup(strings.TrimSpace(body.Username), body.Password); err != nil {
+		log.Printf("setup failed user=%q from %s: %v", strings.TrimSpace(body.Username), reqIP(r), err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -273,6 +277,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	log.Printf("setup ok user=%q from %s", strings.TrimSpace(body.Username), reqIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session": tok})
 }
 
@@ -285,19 +290,23 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if err := s.d.Login(strings.TrimSpace(body.Username), body.Password); err != nil {
+	user := strings.TrimSpace(body.Username)
+	if err := s.d.Login(user, body.Password); err != nil {
+		log.Printf("login failed user=%q from %s", user, reqIP(r))
 		writeErr(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	tok, err := s.d.Jar.Issue(w, strings.TrimSpace(body.Username))
+	tok, err := s.d.Jar.Issue(w, user)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	log.Printf("login ok user=%q from %s", user, reqIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session": tok})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	log.Printf("logout from %s", reqIP(r))
 	s.d.Jar.Clear(w)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

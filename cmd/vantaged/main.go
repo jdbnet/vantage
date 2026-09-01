@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/jdbnet/vantage/internal/appcore"
 )
@@ -26,12 +31,41 @@ func main() {
 	}
 	defer core.Close()
 
-	log.Printf("vantaged %s listening on %s (data %s)", appcore.Version, core.Listen, *dataDir)
-	srv := &http.Server{Addr: core.Listen, Handler: core.Handler()}
+	tls := "off"
 	if secure {
-		log.Fatal(srv.ListenAndServeTLS(*tlsCert, *tlsKey))
+		tls = "on"
 	}
-	log.Fatal(srv.ListenAndServe())
+	log.Printf("vantaged %s listening on %s (data %s tls=%s)", appcore.Version, core.Listen, *dataDir, tls)
+	srv := &http.Server{
+		Addr:              core.Listen,
+		Handler:           core.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		ErrorLog:          log.Default(),
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		log.Printf("vantaged shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("vantaged shutdown: %v", err)
+		}
+	}()
+
+	var serveErr error
+	if secure {
+		serveErr = srv.ListenAndServeTLS(*tlsCert, *tlsKey)
+	} else {
+		serveErr = srv.ListenAndServe()
+	}
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		log.Fatal(serveErr)
+	}
+	log.Printf("vantaged stopped")
 }
 
 func defaultDataDir() string {
