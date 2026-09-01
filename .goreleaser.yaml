@@ -82,13 +82,7 @@ docker_manifests:
 changelog:
   disable: true
 
-checksum:
-  extra_files:
-    - glob: desktop-artifacts/*
-
 release:
-  extra_files:
-    - glob: desktop-artifacts/*
   github:
     owner: jdbnet
     name: vantage

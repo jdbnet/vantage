@@ -56,6 +56,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install Linux desktop dependencies
         if: matrix.target == 'linux'
@@ -139,8 +141,8 @@ jobs:
           path: desktop-artifacts/*
           if-no-files-found: error
 
-  publish:
-    needs: [version, desktop]
+  docker:
+    needs: version
     if: needs.version.outputs.version != ''
     runs-on: ubuntu-latest
     env:
@@ -158,12 +160,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: desktop-*
-          merge-multiple: true
-          path: desktop-artifacts
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -180,6 +178,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  publish:
+    needs: [version, desktop, docker]
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: desktop-artifacts
+
+      - name: Attach desktop artifacts to release
+        run: |
+          gh release upload "v${VERSION}" desktop-artifacts/* --clobber
+          (cd desktop-artifacts && sha256sum *) > desktop_checksums.txt
+          gh release upload "v${VERSION}" desktop_checksums.txt --clobber
+
       - name: Upload to Aptuary
         env:
           APTUARY_URL: ${{ secrets.APTUARY_URL }}
@@ -191,7 +213,7 @@ jobs:
           fi
           BASE="${APTUARY_URL%/}"
           QUERY="distribution=${APTUARY_DISTRIBUTION}&component=${APTUARY_COMPONENT}"
-          for deb in desktop-artifacts/vantage_${VERSION}_*.deb dist/vantage_${VERSION}_*.deb; do
+          for deb in desktop-artifacts/vantage_${VERSION}_*.deb; do
             [ -f "$deb" ] || continue
             echo "Uploading ${deb}"
             curl -fsSL -X POST \
