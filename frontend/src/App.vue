@@ -31,7 +31,7 @@ interface TabItem {
 const loggedIn = ref(false);
 const checking = ref(true);
 const appVersion = ref("unknown");
-const auditLogEnabled = ref(true);
+const auditLogEnabled = ref(false);
 const identities = ref<IdentityRow[]>([]);
 const allHosts = ref<HostRow[]>([]);
 const allFolders = ref<FolderRow[]>([]);
@@ -335,7 +335,7 @@ const settingsForm = ref({
   accent_color: DEFAULT_ACCENT,
   sync_url: "",
   sync_api_key: "",
-  audit_log_enabled: true,
+  audit_log_enabled: false,
 });
 
 watch(

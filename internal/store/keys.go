@@ -256,7 +256,7 @@ func (s *Store) DefaultSettings() model.Settings {
 		DisplayWidth:       1920,
 		DisplayHeight:      1080,
 		AccentColor:        "#1ebe8a",
-		AuditLogEnabled:    true,
+		AuditLogEnabled:    false,
 		ReplicaID:          s.replicaID,
 	}
 }
