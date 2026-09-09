@@ -1,3 +1,7 @@
+<script lang="ts">
+const sshCopiedShared = { text: "" };
+</script>
+
 <script setup lang="ts">
 import {
   onMounted,
@@ -91,6 +95,10 @@ let guacPasteKeysym = 0x76;
 let guacPasteFallbackTimer: number | null = null;
 let lastPushedClipboard = "";
 let sessionAlive = true;
+let sshPrimaryText = "";
+let sshClipDoc: Document | null = null;
+let sshClipEl: HTMLElement | null = null;
+let sshMiddlePasteAt = 0;
 
 function clearPingInterval() {
   if (pingInterval) {
@@ -372,6 +380,89 @@ function isEditableTarget(el: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
 }
 
+function isXtermHelper(el: EventTarget | null): boolean {
+  return el instanceof HTMLElement && el.classList.contains("xterm-helper-textarea");
+}
+
+function sshTermActive(target: EventTarget | null): boolean {
+  const el = termEl.value;
+  if (!el || !props.visible) return false;
+  if (target instanceof Node && el.contains(target)) return true;
+  const ae = sessionDoc().activeElement;
+  return ae instanceof Node && el.contains(ae);
+}
+
+function rememberSshClipboard(text: string) {
+  if (text && text.length <= CLIPBOARD_MAX) {
+    sshCopiedShared.text = text;
+  }
+}
+
+function pasteSsh(text: string) {
+  if (!term || !text) return;
+  term.paste(text.length <= CLIPBOARD_MAX ? text : text.slice(0, CLIPBOARD_MAX));
+}
+
+function onSshCopy(ev: ClipboardEvent) {
+  if (!term || !sshTermActive(ev.target)) return;
+  const sel = term.getSelection();
+  if (!sel) return;
+  rememberSshClipboard(sel);
+}
+
+function onSshPaste(ev: ClipboardEvent) {
+  if (!term || !sshTermActive(ev.target)) return;
+  if (isEditableTarget(ev.target) && !isXtermHelper(ev.target)) return;
+  if (sshMiddlePasteAt && Date.now() - sshMiddlePasteAt < 100) {
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    return;
+  }
+  const fromEvent = ev.clipboardData?.getData("text/plain") || "";
+  if (fromEvent) {
+    rememberSshClipboard(fromEvent);
+    return;
+  }
+  const fallback = sshCopiedShared.text || term.getSelection() || sshPrimaryText;
+  if (!fallback) return;
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+  pasteSsh(fallback);
+}
+
+function onSshMiddleClick(ev: MouseEvent) {
+  if (ev.button !== 1) return;
+  const el = termEl.value;
+  if (!term || !el || !el.contains(ev.target as Node)) return;
+  const text = term.getSelection() || sshPrimaryText || sshCopiedShared.text;
+  if (!text) return;
+  ev.preventDefault();
+  sshMiddlePasteAt = Date.now();
+  pasteSsh(text);
+}
+
+function disposeSshClipboard() {
+  if (sshClipDoc) {
+    sshClipDoc.removeEventListener("copy", onSshCopy, true);
+    sshClipDoc.removeEventListener("paste", onSshPaste, true);
+  }
+  sshClipEl?.removeEventListener("mousedown", onSshMiddleClick, true);
+  sshClipDoc = null;
+  sshClipEl = null;
+}
+
+function bindSshClipboard() {
+  const el = termEl.value;
+  if (!el) return;
+  const doc = el.ownerDocument || sessionDoc();
+  disposeSshClipboard();
+  sshClipDoc = doc;
+  sshClipEl = el;
+  doc.addEventListener("copy", onSshCopy, true);
+  doc.addEventListener("paste", onSshPaste, true);
+  el.addEventListener("mousedown", onSshMiddleClick, true);
+}
+
 function armGuacInput() {
   const wrap = guacEl.value;
   guacInputActive = true;
@@ -558,7 +649,9 @@ function bindVisibility() {
 async function relayout() {
   await nextTick();
   observeSessionSize();
-  if (!isSSH()) {
+  if (isSSH()) {
+    bindSshClipboard();
+  } else {
     bindGuacDocEvents();
   }
   bindVisibility();
@@ -764,7 +857,21 @@ onMounted(async () => {
         }
         return false;
       }
+      if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === "c") {
+        if (ev.type === "keydown" && term?.hasSelection()) {
+          rememberSshClipboard(term.getSelection());
+        }
+        return true;
+      }
       return true;
+    });
+
+    term.onSelectionChange(() => {
+      const sel = term?.getSelection() || "";
+      if (sel) {
+        sshPrimaryText = sel;
+        rememberSshClipboard(sel);
+      }
     });
 
     term.onData((data) => {
@@ -781,6 +888,7 @@ onMounted(async () => {
     });
 
     observeSessionSize();
+    bindSshClipboard();
     connectSsh();
   } else {
     await nextTick();
@@ -809,6 +917,7 @@ onUnmounted(() => {
     document.removeEventListener("fullscreenchange", fullscreenHandler);
     fullscreenHandler = null;
   }
+  disposeSshClipboard();
   disposeGuacInput();
   ro?.disconnect();
   ro = null;
