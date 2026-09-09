@@ -20,7 +20,7 @@ export function openPopout(opts: {
   const win = window.open(
     "about:blank",
     opts.name,
-    "popup=yes,width=1280,height=800,menubar=no,toolbar=no,location=no,status=no,scrollbars=yes,resizable=yes",
+    "popup=yes,width=1280,height=800,menubar=no,toolbar=no,location=no,status=no,scrollbars=no,resizable=yes",
   );
   if (!win) return null;
 

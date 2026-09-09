@@ -99,6 +99,13 @@ let sshPrimaryText = "";
 let sshClipDoc: Document | null = null;
 let sshClipEl: HTMLElement | null = null;
 let sshMiddlePasteAt = 0;
+let sshFitTimer: number | null = null;
+let sshFitTimerWin: Window | null = null;
+let lastSentCols = 0;
+let lastSentRows = 0;
+let pendingTermWrite = "";
+let termWriteRaf = 0;
+let termWriteRafWin: Window | null = null;
 
 function clearPingInterval() {
   if (pingInterval) {
@@ -157,8 +164,13 @@ function wsUrl(hostId: string): string {
 
 function sendResize() {
   if (!ws || ws.readyState !== WebSocket.OPEN || !term) return;
-  const dims = { cols: term.cols, rows: term.rows };
-  ws.send(JSON.stringify({ type: "resize", ...dims }));
+  const cols = term.cols;
+  const rows = term.rows;
+  if (cols < 2 || rows < 2) return;
+  if (cols === lastSentCols && rows === lastSentRows) return;
+  lastSentCols = cols;
+  lastSentRows = rows;
+  ws.send(JSON.stringify({ type: "resize", cols, rows }));
 }
 
 function sendPing() {
@@ -167,14 +179,64 @@ function sendPing() {
   }
 }
 
+function clearSshFitTimer() {
+  if (sshFitTimer != null && sshFitTimerWin) {
+    sshFitTimerWin.clearTimeout(sshFitTimer);
+  }
+  sshFitTimer = null;
+  sshFitTimerWin = null;
+}
+
 function fitAndResize() {
   if (!fit || !term || !props.visible) return;
   try {
+    const proposed = fit.proposeDimensions();
+    if (proposed && proposed.cols === term.cols && proposed.rows === term.rows) {
+      sendResize();
+      return;
+    }
     fit.fit();
-    sendResize();
   } catch {
     /* ignore */
   }
+  sendResize();
+}
+
+function scheduleSshFit() {
+  if (!isSSH() || !props.visible) return;
+  const win = sessionWin();
+  clearSshFitTimer();
+  sshFitTimerWin = win;
+  sshFitTimer = win.setTimeout(() => {
+    sshFitTimer = null;
+    sshFitTimerWin = null;
+    fitAndResize();
+  }, 100);
+}
+
+function cancelTermWriteRaf() {
+  if (termWriteRaf && termWriteRafWin) {
+    termWriteRafWin.cancelAnimationFrame(termWriteRaf);
+  }
+  termWriteRaf = 0;
+  termWriteRafWin = null;
+}
+
+function flushTermWrite() {
+  termWriteRaf = 0;
+  termWriteRafWin = null;
+  if (!term || !pendingTermWrite) return;
+  const chunk = pendingTermWrite;
+  pendingTermWrite = "";
+  term.write(chunk);
+}
+
+function queueTermWrite(text: string) {
+  pendingTermWrite += text;
+  if (!term || termWriteRaf) return;
+  const win = sessionWin();
+  termWriteRafWin = win;
+  termWriteRaf = win.requestAnimationFrame(flushTermWrite);
 }
 
 function isControlMessage(raw: string): boolean {
@@ -231,6 +293,8 @@ function replyHostKey(accept: boolean, replace: boolean) {
 function connectSsh() {
   serverBackOnline.value = false;
   hostKeyPrompt.value = null;
+  lastSentCols = 0;
+  lastSentRows = 0;
   clearPingInterval();
   closeSocket();
   if (!sessionAlive) return;
@@ -245,19 +309,18 @@ function connectSsh() {
   };
 
   ws.onmessage = (ev) => {
-    if (!term) return;
     if (typeof ev.data === "string") {
       if (isControlMessage(ev.data)) return;
-      term.write(ev.data);
+      queueTermWrite(ev.data);
       return;
     }
     const u8 = new Uint8Array(ev.data as ArrayBuffer);
     const text = new TextDecoder().decode(u8);
     if (text.startsWith("{") && isControlMessage(text)) return;
-    term.write(text);
+    queueTermWrite(text);
     if (!connId.value) {
       status.value = "";
-      term.focus();
+      term?.focus();
     }
   };
 
@@ -362,7 +425,12 @@ function scheduleGuacRemoteResize() {
 }
 
 function sessionDoc(): Document {
-  return guacEl.value?.ownerDocument || sessionPane.value?.ownerDocument || document;
+  return (
+    termEl.value?.ownerDocument ||
+    guacEl.value?.ownerDocument ||
+    sessionPane.value?.ownerDocument ||
+    document
+  );
 }
 
 function sessionWin(): Window {
@@ -616,14 +684,15 @@ function bindGuacDocEvents() {
 function observeSessionSize() {
   ro?.disconnect();
   ro = null;
+  const RO = sessionWin().ResizeObserver || ResizeObserver;
   if (isSSH()) {
     if (!termEl.value) return;
-    ro = new ResizeObserver(() => fitAndResize());
+    ro = new RO(() => scheduleSshFit());
     ro.observe(termEl.value);
     return;
   }
   if (!guacEl.value) return;
-  ro = new ResizeObserver(() => {
+  ro = new RO(() => {
     if (!props.visible) return;
     fitGuacDisplay();
     scheduleGuacRemoteResize();
@@ -826,67 +895,113 @@ function onFullscreenChange() {
   });
 }
 
+function snapshotSshBuffer(): string {
+  if (!term) return "";
+  const buffer = term.buffer.active;
+  const lines: string[] = [];
+  for (let i = 0; i < buffer.length; i++) {
+    lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
+  }
+  while (lines.length && lines[lines.length - 1].trim() === "") {
+    lines.pop();
+  }
+  return lines.join("\r\n");
+}
+
+function disposeSshTerminal() {
+  cancelTermWriteRaf();
+  try {
+    term?.dispose();
+  } catch {
+    /* ignore */
+  }
+  term = null;
+  fit = null;
+  searchAddon = null;
+}
+
+function createSshTerminal() {
+  if (!termEl.value) return;
+  term = new Terminal({
+    cursorBlink: true,
+    scrollback: 1000,
+    fontFamily: props.settings?.terminal_font_family || "DM Mono, ui-monospace, monospace",
+    fontSize: props.settings?.terminal_font_size || 14,
+    theme: terminalTheme(),
+  });
+  fit = new FitAddon();
+  searchAddon = new SearchAddon();
+  term.loadAddon(fit);
+  term.loadAddon(searchAddon);
+  term.loadAddon(
+    new WebLinksAddon((_ev, uri) => {
+      window.open(uri, "_blank", "noopener,noreferrer");
+    }),
+  );
+  term.open(termEl.value);
+  try {
+    fit.fit();
+  } catch {
+    /* ignore */
+  }
+
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.ctrlKey && ev.shiftKey && ev.key.toLowerCase() === "f") {
+      if (ev.type === "keydown") {
+        ev.preventDefault();
+        openSearch();
+      }
+      return false;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === "c") {
+      if (ev.type === "keydown" && term?.hasSelection()) {
+        rememberSshClipboard(term.getSelection());
+      }
+      return true;
+    }
+    return true;
+  });
+
+  term.onSelectionChange(() => {
+    const sel = term?.getSelection() || "";
+    if (sel) {
+      sshPrimaryText = sel;
+      rememberSshClipboard(sel);
+    }
+  });
+
+  term.onData((data) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(new TextEncoder().encode(data));
+    }
+    emit("broadcast-data", data);
+  });
+
+  term.onResize(() => {
+    sendResize();
+  });
+}
+
+function rebuildSshTerminal() {
+  if (!isSSH() || !termEl.value) return;
+  flushTermWrite();
+  const snapshot = snapshotSshBuffer();
+  disposeSshTerminal();
+  termEl.value.replaceChildren();
+  lastSentCols = 0;
+  lastSentRows = 0;
+  createSshTerminal();
+  if (snapshot && term) {
+    term.write(snapshot);
+  }
+  flushTermWrite();
+}
+
 onMounted(async () => {
   await nextTick();
   if (isSSH()) {
     if (!termEl.value) return;
-    term = new Terminal({
-      cursorBlink: true,
-      scrollback: 1000,
-      fontFamily: props.settings?.terminal_font_family || "DM Mono, ui-monospace, monospace",
-      fontSize: props.settings?.terminal_font_size || 14,
-      theme: terminalTheme(),
-    });
-    fit = new FitAddon();
-    searchAddon = new SearchAddon();
-    term.loadAddon(fit);
-    term.loadAddon(searchAddon);
-    term.loadAddon(
-      new WebLinksAddon((_ev, uri) => {
-        window.open(uri, "_blank", "noopener,noreferrer");
-      }),
-    );
-    term.open(termEl.value);
-    fit.fit();
-
-    term.attachCustomKeyEventHandler((ev) => {
-      if (ev.ctrlKey && ev.shiftKey && ev.key.toLowerCase() === "f") {
-        if (ev.type === "keydown") {
-          ev.preventDefault();
-          openSearch();
-        }
-        return false;
-      }
-      if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === "c") {
-        if (ev.type === "keydown" && term?.hasSelection()) {
-          rememberSshClipboard(term.getSelection());
-        }
-        return true;
-      }
-      return true;
-    });
-
-    term.onSelectionChange(() => {
-      const sel = term?.getSelection() || "";
-      if (sel) {
-        sshPrimaryText = sel;
-        rememberSshClipboard(sel);
-      }
-    });
-
-    term.onData((data) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(new TextEncoder().encode(data));
-      }
-      emit("broadcast-data", data);
-    });
-
-    term.onResize(({ cols, rows }) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", cols, rows }));
-      }
-    });
-
+    createSshTerminal();
     observeSessionSize();
     bindSshClipboard();
     connectSsh();
@@ -904,6 +1019,9 @@ onMounted(async () => {
 onUnmounted(() => {
   sessionAlive = false;
   clearPingInterval();
+  clearSshFitTimer();
+  cancelTermWriteRaf();
+  pendingTermWrite = "";
   if (guacResizeTimer) {
     window.clearTimeout(guacResizeTimer);
     guacResizeTimer = null;
@@ -922,14 +1040,7 @@ onUnmounted(() => {
   ro?.disconnect();
   ro = null;
   closeSocket();
-  try {
-    term?.dispose();
-  } catch {
-    /* ignore */
-  }
-  term = null;
-  fit = null;
-  searchAddon = null;
+  disposeSshTerminal();
   try {
     guacClient?.disconnect();
   } catch {
@@ -957,6 +1068,10 @@ watch(
 watch(
   () => props.poppedOut,
   async () => {
+    await nextTick();
+    if (isSSH()) {
+      rebuildSshTerminal();
+    }
     await relayout();
   },
 );
@@ -1066,7 +1181,7 @@ watch(
       <div
         v-if="protocol === 'ssh'"
         ref="termEl"
-        class="h-full min-h-[320px] rounded-lg border border-slate-800 bg-[#0d1117] p-1"
+        class="h-full min-h-[320px] overflow-hidden rounded-lg border border-slate-800 bg-[#0d1117] p-1"
       />
       <div
         v-else

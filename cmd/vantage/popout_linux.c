@@ -1,3 +1,5 @@
+//go:build linux
+
 #include "popout_linux.h"
 
 #include <gtk/gtk.h>
