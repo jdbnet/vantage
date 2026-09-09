@@ -1,5 +1,9 @@
 //go:build darwin
 
+#if !__has_feature(objc_arc)
+#error popout_darwin.m must be compiled with ARC
+#endif
+
 #import "popout_darwin.h"
 
 #import <Cocoa/Cocoa.h>
@@ -7,16 +11,21 @@
 #import <objc/runtime.h>
 
 static char kAttachedKey;
+static char kProxyKey;
+static char kAttacherKey;
 static NSMutableArray *gOwners;
-static BOOL gHooked;
-static WKWebView *(*gOriginalCreate)(id, SEL, WKWebView *, WKWebViewConfiguration *, WKNavigationAction *, WKWindowFeatures *);
-static void (*gOriginalDidClose)(id, SEL, WKWebView *);
 
 @interface VantagePopoutOwner : NSObject <NSWindowDelegate>
 @property(strong) NSWindow *window;
 @property(strong) WKWebView *webView;
 - (void)detach;
 @end
+
+@interface VantageUIDelegate : NSObject <WKUIDelegate>
+@property(strong) id original;
+@end
+
+static WKWebView *vantage_make_popout(WKWebView *parent, WKWebViewConfiguration *configuration, WKWindowFeatures *features);
 
 @implementation VantagePopoutOwner
 
@@ -56,13 +65,83 @@ static void (*gOriginalDidClose)(id, SEL, WKWebView *);
 
 @end
 
-static VantagePopoutOwner *owner_for_view(WKWebView *view) {
-	for (VantagePopoutOwner *owner in gOwners) {
-		if (owner.webView == view) {
-			return owner;
+@implementation VantageUIDelegate
+
+- (BOOL)respondsToSelector:(SEL)aSelector {
+	if (aSelector == @selector(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:) ||
+	    aSelector == @selector(webViewDidClose:)) {
+		return YES;
+	}
+	if ([self.original respondsToSelector:aSelector]) {
+		return YES;
+	}
+	return [super respondsToSelector:aSelector];
+}
+
+- (id)forwardingTargetForSelector:(SEL)aSelector {
+	if ([self.original respondsToSelector:aSelector]) {
+		return self.original;
+	}
+	return [super forwardingTargetForSelector:aSelector];
+}
+
+- (WKWebView *)webView:(WKWebView *)webView
+    createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
+             forNavigationAction:(WKNavigationAction *)navigationAction
+                  windowFeatures:(WKWindowFeatures *)windowFeatures {
+	(void)navigationAction;
+	NSLog(@"vantage: createWebView for %@", navigationAction.request.URL);
+	return vantage_make_popout(webView, configuration, windowFeatures);
+}
+
+- (void)webViewDidClose:(WKWebView *)webView {
+	for (VantagePopoutOwner *owner in [gOwners copy]) {
+		if (owner.webView == webView && owner.window) {
+			[owner.window close];
+			break;
 		}
 	}
-	return nil;
+	if ([self.original respondsToSelector:@selector(webViewDidClose:)]) {
+		[self.original webViewDidClose:webView];
+	}
+}
+
+@end
+
+static void vantage_allow_js_windows(WKWebView *view) {
+	@try {
+		view.configuration.preferences.javaScriptCanOpenWindowsAutomatically = YES;
+		if (@available(macOS 12.3, *)) {
+			view.configuration.preferences.elementFullscreenEnabled = YES;
+		}
+	} @catch (NSException *ex) {
+		(void)ex;
+	}
+	Ivar ivar = class_getInstanceVariable(object_getClass(view), "_configuration");
+	if (!ivar) {
+		return;
+	}
+	WKWebViewConfiguration *cfg = object_getIvar(view, ivar);
+	if ([cfg isKindOfClass:[WKWebViewConfiguration class]]) {
+		cfg.preferences.javaScriptCanOpenWindowsAutomatically = YES;
+		if (@available(macOS 12.3, *)) {
+			cfg.preferences.elementFullscreenEnabled = YES;
+		}
+	}
+}
+
+static void vantage_install_proxy(WKWebView *view) {
+	id current = view.UIDelegate;
+	if ([current isKindOfClass:[VantageUIDelegate class]]) {
+		vantage_allow_js_windows(view);
+		return;
+	}
+	VantageUIDelegate *proxy = [VantageUIDelegate new];
+	proxy.original = current;
+	objc_setAssociatedObject(view, &kProxyKey, proxy, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+	view.UIDelegate = proxy;
+	vantage_allow_js_windows(view);
+	NSLog(@"vantage: pop-out UIDelegate installed on %@", NSStringFromClass(object_getClass(view)));
 }
 
 static WKWebView *vantage_make_popout(WKWebView *parent, WKWebViewConfiguration *configuration, WKWindowFeatures *features) {
@@ -99,9 +178,16 @@ static WKWebView *vantage_make_popout(WKWebView *parent, WKWebViewConfiguration 
 	}
 
 	configuration.preferences.javaScriptCanOpenWindowsAutomatically = YES;
-	WKWebView *child = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
+	if (@available(macOS 12.3, *)) {
+		configuration.preferences.elementFullscreenEnabled = YES;
+	}
+	WKWebView *child = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, width, height) configuration:configuration];
 	child.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-	child.UIDelegate = parent.UIDelegate;
+	id parentDelegate = parent.UIDelegate;
+	if (parentDelegate) {
+		objc_setAssociatedObject(child, &kProxyKey, objc_getAssociatedObject(parent, &kProxyKey), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+		child.UIDelegate = parentDelegate;
+	}
 	window.contentView = child;
 
 	VantagePopoutOwner *owner = [VantagePopoutOwner new];
@@ -116,63 +202,14 @@ static WKWebView *vantage_make_popout(WKWebView *parent, WKWebViewConfiguration 
 
 	[NSApp activateIgnoringOtherApps:YES];
 	[window makeKeyAndOrderFront:nil];
+	[window displayIfNeeded];
 	return child;
 }
 
-static WKWebView *VantageCreateWebView(id self, SEL cmd, WKWebView *webView, WKWebViewConfiguration *configuration,
-    WKNavigationAction *action, WKWindowFeatures *features) {
-	(void)self;
-	(void)cmd;
-	(void)action;
-	WKWebView *created = vantage_make_popout(webView, configuration, features);
-	if (created) {
-		return created;
-	}
-	if (gOriginalCreate) {
-		return gOriginalCreate(self, cmd, webView, configuration, action, features);
-	}
-	return nil;
-}
-
-static void VantageWebViewDidClose(id self, SEL cmd, WKWebView *webView) {
-	VantagePopoutOwner *owner = owner_for_view(webView);
-	if (owner.window) {
-		[owner.window close];
-	}
-	if (gOriginalDidClose) {
-		gOriginalDidClose(self, cmd, webView);
-	}
-}
-
-static void hook_selector(Class cls, SEL sel, IMP imp, const char *types, IMP *original) {
-	Method method = class_getInstanceMethod(cls, sel);
-	if (method) {
-		*original = method_setImplementation(method, imp);
-		return;
-	}
-	class_addMethod(cls, sel, imp, types);
-}
-
-static void vantage_hook_delegate(id delegate) {
-	if (!delegate || gHooked) {
-		return;
-	}
-	Class cls = [delegate class];
-	hook_selector(cls, @selector(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:),
-	    (IMP)VantageCreateWebView, "@@:@@@@", (IMP *)&gOriginalCreate);
-	hook_selector(cls, @selector(webViewDidClose:), (IMP)VantageWebViewDidClose, "v@:@", (IMP *)&gOriginalDidClose);
-	gHooked = YES;
-}
-
-static void vantage_attach_view(WKWebView *view) {
-	if (!objc_getAssociatedObject(view, &kAttachedKey)) {
-		objc_setAssociatedObject(view, &kAttachedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-		view.configuration.preferences.javaScriptCanOpenWindowsAutomatically = YES;
-	}
-	vantage_hook_delegate(view.UIDelegate);
-}
-
 static WKWebView *find_webview(NSView *view) {
+	if (!view) {
+		return nil;
+	}
 	if ([view isKindOfClass:[WKWebView class]]) {
 		return (WKWebView *)view;
 	}
@@ -187,15 +224,29 @@ static WKWebView *find_webview(NSView *view) {
 
 static BOOL vantage_attach_all(void) {
 	BOOL found = NO;
-	for (NSWindow *window in NSApp.windows) {
-		WKWebView *view = find_webview(window.contentView);
+	NSMutableArray *windows = [NSMutableArray array];
+	if (NSApp.windows.count) {
+		[windows addObjectsFromArray:NSApp.windows];
+	}
+	if (NSApp.mainWindow && ![windows containsObject:NSApp.mainWindow]) {
+		[windows addObject:NSApp.mainWindow];
+	}
+	if (NSApp.keyWindow && ![windows containsObject:NSApp.keyWindow]) {
+		[windows addObject:NSApp.keyWindow];
+	}
+	for (NSWindow *window in windows) {
+		NSView *root = window.contentView.superview ?: window.contentView;
+		WKWebView *view = find_webview(root);
 		if (!view) {
 			continue;
 		}
 		found = YES;
-		vantage_attach_view(view);
+		if (!objc_getAssociatedObject(view, &kAttachedKey)) {
+			objc_setAssociatedObject(view, &kAttachedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+		}
+		vantage_install_proxy(view);
 	}
-	return found && gHooked;
+	return found;
 }
 
 @interface VantagePopoutAttacher : NSObject
@@ -203,11 +254,12 @@ static BOOL vantage_attach_all(void) {
 - (void)tick;
 @end
 
-static char kAttacherKey;
-
 @implementation VantagePopoutAttacher
 - (void)tick {
-	if (vantage_attach_all() || ++self.tries > 100) {
+	if (vantage_attach_all() || ++self.tries > 200) {
+		if (self.tries > 200) {
+			NSLog(@"vantage: pop-out hook did not find a WKWebView");
+		}
 		objc_setAssociatedObject(NSApp, &kAttacherKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 		return;
 	}
@@ -217,6 +269,13 @@ static char kAttacherKey;
 
 void vantage_enable_webkit_popouts(void) {
 	dispatch_async(dispatch_get_main_queue(), ^{
+		VantagePopoutAttacher *existing = objc_getAssociatedObject(NSApp, &kAttacherKey);
+		if (existing) {
+			if (vantage_attach_all()) {
+				return;
+			}
+			return;
+		}
 		VantagePopoutAttacher *attacher = [VantagePopoutAttacher new];
 		objc_setAssociatedObject(NSApp, &kAttacherKey, attacher, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 		[attacher tick];

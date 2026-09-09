@@ -12,38 +12,66 @@ function copyStyles(from: Document, to: Document) {
   }
 }
 
+function openBlankWindow(name: string): Window | null {
+  const features = "width=1280,height=800,menubar=no,toolbar=no,location=no,status=no,resizable=yes";
+  const attempts: Array<() => Window | null> = [
+    () => window.open("", name, features),
+    () => window.open("", name),
+    () => window.open("about:blank", name, features),
+    () => window.open("about:blank", name),
+  ];
+  for (const attempt of attempts) {
+    try {
+      const win = attempt();
+      if (win) return win;
+    } catch {
+      /* try the next opener style */
+    }
+  }
+  return null;
+}
+
 export function openPopout(opts: {
   name: string;
   title: string;
   onClose: () => void;
 }): PopoutHandle | null {
-  const win = window.open(
-    "about:blank",
-    opts.name,
-    "popup=yes,width=1280,height=800,menubar=no,toolbar=no,location=no,status=no,scrollbars=no,resizable=yes",
-  );
+  const win = openBlankWindow(opts.name);
   if (!win) return null;
 
-  const doc = win.document;
-  doc.open();
-  doc.write(
-    '<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"></head><body></body></html>',
-  );
-  doc.close();
-  copyStyles(document, doc);
-  const css = doc.createElement("style");
-  css.textContent =
-    "html,body{margin:0;height:100%;width:100%;background:#0d1117;overflow:hidden;color-scheme:dark}" +
-    "#popout-root{height:100%;width:100%;display:flex;min-height:0;min-width:0}";
-  doc.head.appendChild(css);
-  doc.title = opts.title;
-  doc.body.style.margin = "0";
-  doc.body.style.height = "100%";
-  doc.body.style.background = "#0d1117";
+  let mount: HTMLElement;
+  try {
+    const doc = win.document;
+    if (!doc.body) {
+      doc.open();
+      doc.write(
+        '<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"></head><body></body></html>',
+      );
+      doc.close();
+    }
+    doc.documentElement.classList.add("dark");
+    copyStyles(document, doc);
+    const css = doc.createElement("style");
+    css.textContent =
+      "html,body{margin:0;height:100%;width:100%;background:#0d1117;overflow:hidden;color-scheme:dark}" +
+      "#popout-root{height:100%;width:100%;display:flex;min-height:0;min-width:0}";
+    doc.head.appendChild(css);
+    doc.title = opts.title;
+    doc.body.style.margin = "0";
+    doc.body.style.height = "100%";
+    doc.body.style.background = "#0d1117";
 
-  const mount = doc.createElement("div");
-  mount.id = "popout-root";
-  doc.body.appendChild(mount);
+    mount = doc.createElement("div");
+    mount.id = "popout-root";
+    doc.body.appendChild(mount);
+  } catch {
+    try {
+      win.close();
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
 
   let closed = false;
   const notifyClosed = () => {

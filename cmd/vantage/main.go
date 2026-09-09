@@ -12,6 +12,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 )
 
 func main() {
@@ -44,6 +45,14 @@ func main() {
 			Handler: core.Handler(),
 		},
 		BackgroundColour: &options.RGBA{R: 13, G: 17, B: 23, A: 255},
+		Mac: &mac.Options{
+			Preferences: &mac.Preferences{
+				FullscreenEnabled: mac.Enabled,
+			},
+		},
+		OnStartup: func(ctx context.Context) {
+			enableWebkitPopouts()
+		},
 		OnDomReady: func(ctx context.Context) {
 			enableWebkitPopouts()
 		},

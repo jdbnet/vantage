@@ -88,6 +88,7 @@ let guacResizeTimer: number | null = null;
 let lastGuacRemoteW = 0;
 let lastGuacRemoteH = 0;
 let fullscreenHandler: (() => void) | null = null;
+let fullscreenDoc: Document | null = null;
 let guacCtrlDown = false;
 let guacMetaDown = false;
 let guacPastePending = false;
@@ -724,6 +725,7 @@ async function relayout() {
     bindGuacDocEvents();
   }
   bindVisibility();
+  bindFullscreen();
   fitAndResize();
   fitGuacDisplay();
   scheduleGuacRemoteResize();
@@ -872,27 +874,56 @@ function runSearch(dir: "next" | "prev") {
   else searchAddon.findPrevious(q);
 }
 
+type FullscreenDocument = Document & {
+  webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => Promise<void> | void;
+};
+
+type FullscreenHost = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void;
+};
+
+function fullscreenElementOf(doc: Document): Element | null {
+  const d = doc as FullscreenDocument;
+  return d.fullscreenElement || d.webkitFullscreenElement || null;
+}
+
 async function toggleFullscreen() {
-  const el = sessionPane.value;
+  const el = sessionPane.value as FullscreenHost | null;
   if (!el) return;
+  const doc = (el.ownerDocument || document) as FullscreenDocument;
   try {
-    if (document.fullscreenElement) {
-      await document.exitFullscreen();
-    } else {
-      await el.requestFullscreen();
+    if (fullscreenElementOf(doc)) {
+      if (doc.exitFullscreen) await doc.exitFullscreen();
+      else await doc.webkitExitFullscreen?.();
+      return;
     }
+    if (el.requestFullscreen) await el.requestFullscreen();
+    else await el.webkitRequestFullscreen?.();
   } catch {
-    /* ignore */
+    /* WKWebView rejects this unless elementFullscreenEnabled is on */
   }
 }
 
 function onFullscreenChange() {
-  isFullscreen.value = document.fullscreenElement === sessionPane.value;
+  const doc = sessionPane.value?.ownerDocument || document;
+  isFullscreen.value = fullscreenElementOf(doc) === sessionPane.value;
   nextTick(() => {
     fitAndResize();
     fitGuacDisplay();
     scheduleGuacRemoteResize();
   });
+}
+
+function bindFullscreen() {
+  if (fullscreenHandler && fullscreenDoc) {
+    fullscreenDoc.removeEventListener("fullscreenchange", fullscreenHandler);
+    fullscreenDoc.removeEventListener("webkitfullscreenchange", fullscreenHandler);
+  }
+  fullscreenHandler = onFullscreenChange;
+  fullscreenDoc = sessionDoc();
+  fullscreenDoc.addEventListener("fullscreenchange", fullscreenHandler);
+  fullscreenDoc.addEventListener("webkitfullscreenchange", fullscreenHandler);
 }
 
 function snapshotSshBuffer(): string {
@@ -1012,8 +1043,7 @@ onMounted(async () => {
   }
 
   bindVisibility();
-  fullscreenHandler = onFullscreenChange;
-  document.addEventListener("fullscreenchange", fullscreenHandler);
+  bindFullscreen();
 });
 
 onUnmounted(() => {
@@ -1031,9 +1061,11 @@ onUnmounted(() => {
     visibilityHandler = null;
     visibilityDoc = null;
   }
-  if (fullscreenHandler) {
-    document.removeEventListener("fullscreenchange", fullscreenHandler);
+  if (fullscreenHandler && fullscreenDoc) {
+    fullscreenDoc.removeEventListener("fullscreenchange", fullscreenHandler);
+    fullscreenDoc.removeEventListener("webkitfullscreenchange", fullscreenHandler);
     fullscreenHandler = null;
+    fullscreenDoc = null;
   }
   disposeSshClipboard();
   disposeGuacInput();
