@@ -139,7 +139,7 @@ jobs:
           export ARCH=amd64
           "$(go env GOPATH)/bin/nfpm" package --packager deb --config nfpm.yaml --target "desktop-artifacts/vantage_${VERSION}_${ARCH}.deb"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.target }}
           path: desktop-artifacts/*
@@ -194,7 +194,7 @@ jobs:
         with:
           ref: v${{ needs.version.outputs.version }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: desktop-*
           merge-multiple: true
