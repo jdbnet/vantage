@@ -130,7 +130,15 @@ static void vantage_allow_js_windows(WKWebView *view) {
 	}
 }
 
+static void vantage_enable_native_fullscreen(NSWindow *window) {
+	if (!window) {
+		return;
+	}
+	window.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
+}
+
 static void vantage_install_proxy(WKWebView *view) {
+	vantage_enable_native_fullscreen(view.window);
 	id current = view.UIDelegate;
 	if ([current isKindOfClass:[VantageUIDelegate class]]) {
 		vantage_allow_js_windows(view);
@@ -171,7 +179,7 @@ static WKWebView *vantage_make_popout(WKWebView *parent, WKWebViewConfiguration 
 	window.releasedWhenClosed = NO;
 	window.title = @"Vantage";
 	window.backgroundColor = [NSColor colorWithRed:13.0 / 255.0 green:17.0 / 255.0 blue:23.0 / 255.0 alpha:1.0];
-	window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace | NSWindowCollectionBehaviorFullScreenAuxiliary;
+	window.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorMoveToActiveSpace;
 	if (@available(macOS 10.14, *)) {
 		NSAppearance *appearance = parent.window.appearance;
 		window.appearance = appearance ?: [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];

@@ -89,6 +89,7 @@ let lastGuacRemoteW = 0;
 let lastGuacRemoteH = 0;
 let fullscreenHandler: (() => void) | null = null;
 let fullscreenDoc: Document | null = null;
+let macFullscreenResize: (() => void) | null = null;
 let guacCtrlDown = false;
 let guacMetaDown = false;
 let guacPastePending = false;
@@ -888,9 +889,44 @@ function fullscreenElementOf(doc: Document): Element | null {
   return d.fullscreenElement || d.webkitFullscreenElement || null;
 }
 
+function wailsRuntime(): WailsRuntime | undefined {
+  return window.runtime;
+}
+
+function useMacNativeFullscreen(): boolean {
+  return typeof wailsRuntime()?.WindowFullscreen === "function" && /Mac/i.test(navigator.userAgent);
+}
+
+async function syncMacNativeFullscreen() {
+  const rt = wailsRuntime();
+  if (!rt?.WindowIsFullscreen) return;
+  try {
+    isFullscreen.value = !!(await rt.WindowIsFullscreen());
+  } catch {
+    /* ignore */
+  }
+}
+
 async function toggleFullscreen() {
   const el = sessionPane.value as FullscreenHost | null;
   if (!el) return;
+  const rt = wailsRuntime();
+  if (useMacNativeFullscreen() && rt) {
+    try {
+      const on = rt.WindowIsFullscreen ? !!(await rt.WindowIsFullscreen()) : isFullscreen.value;
+      if (on) rt.WindowUnfullscreen?.();
+      else rt.WindowFullscreen?.();
+      isFullscreen.value = !on;
+      nextTick(() => {
+        fitAndResize();
+        fitGuacDisplay();
+        scheduleGuacRemoteResize();
+      });
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
   const doc = (el.ownerDocument || document) as FullscreenDocument;
   try {
     if (fullscreenElementOf(doc)) {
@@ -920,10 +956,22 @@ function bindFullscreen() {
     fullscreenDoc.removeEventListener("fullscreenchange", fullscreenHandler);
     fullscreenDoc.removeEventListener("webkitfullscreenchange", fullscreenHandler);
   }
+  const prevWin = fullscreenDoc?.defaultView;
+  if (prevWin && macFullscreenResize) {
+    prevWin.removeEventListener("resize", macFullscreenResize);
+    macFullscreenResize = null;
+  }
   fullscreenHandler = onFullscreenChange;
   fullscreenDoc = sessionDoc();
   fullscreenDoc.addEventListener("fullscreenchange", fullscreenHandler);
   fullscreenDoc.addEventListener("webkitfullscreenchange", fullscreenHandler);
+  if (useMacNativeFullscreen()) {
+    const win = sessionWin();
+    macFullscreenResize = () => {
+      void syncMacNativeFullscreen();
+    };
+    win.addEventListener("resize", macFullscreenResize);
+  }
 }
 
 function snapshotSshBuffer(): string {
@@ -1064,6 +1112,11 @@ onUnmounted(() => {
   if (fullscreenHandler && fullscreenDoc) {
     fullscreenDoc.removeEventListener("fullscreenchange", fullscreenHandler);
     fullscreenDoc.removeEventListener("webkitfullscreenchange", fullscreenHandler);
+    const win = fullscreenDoc.defaultView;
+    if (win && macFullscreenResize) {
+      win.removeEventListener("resize", macFullscreenResize);
+      macFullscreenResize = null;
+    }
     fullscreenHandler = null;
     fullscreenDoc = null;
   }

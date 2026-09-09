@@ -1,5 +1,15 @@
 /// <reference types="vite/client" />
 
+interface WailsRuntime {
+  WindowFullscreen?: () => void;
+  WindowUnfullscreen?: () => void;
+  WindowIsFullscreen?: () => Promise<boolean>;
+}
+
+interface Window {
+  runtime?: WailsRuntime;
+}
+
 declare module "guacamole-common-js" {
   const Guacamole: {
     WebSocketTunnel: new (url: string) => {
