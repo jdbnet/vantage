@@ -269,7 +269,10 @@ static WKWebView *vantage_make_popout(WKWebView *parent, WKWebViewConfiguration 
 	window.releasedWhenClosed = NO;
 	window.title = @"Vantage";
 	window.backgroundColor = [NSColor colorWithRed:13.0 / 255.0 green:17.0 / 255.0 blue:23.0 / 255.0 alpha:1.0];
-	window.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary;
+	// FullScreenPrimary enables the green-button native fullscreen on pop-outs.
+	// Avoid MoveToActiveSpace here; that was pulling the main window onto another Space
+	// when minimized and made it hard to recover from the dock.
+	window.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
 	if (@available(macOS 10.14, *)) {
 		NSAppearance *appearance = parent.window.appearance;
 		window.appearance = appearance ?: [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
