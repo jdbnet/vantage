@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch, nextTick } from "vue";
-import { Folder, Pencil, Trash2, Radio, ChevronDown, Settings, SquareArrowOutUpRight } from "@lucide/vue";
+import { onMounted, onUnmounted, ref, watch, nextTick, computed } from "vue";
+import { Folder, Pencil, Trash2, Radio, ChevronDown, Settings, SquareArrowOutUpRight, Maximize2 } from "@lucide/vue";
 import {
   api,
   type HostRow,
@@ -49,6 +49,34 @@ const draggedTabId = ref<string | null>(null);
 const popouts = ref<Record<string, PopoutHandle>>({});
 const tabMenu = ref<{ id: string; x: number; y: number } | null>(null);
 const popoutErr = ref("");
+const tabFullscreen = ref<Record<string, boolean>>({});
+
+const sessionFullscreen = computed(() =>
+  activePanes.value.some((id) => !popouts.value[id] && tabFullscreen.value[id]),
+);
+
+function primaryTabId(): string | null {
+  return activePanes.value.find((id) => !popouts.value[id]) ?? null;
+}
+
+function primaryTabRef() {
+  const id = primaryTabId();
+  return id ? tabRefs.value[id] : null;
+}
+
+async function toggleSessionFullscreen() {
+  const tab = primaryTabRef();
+  if (tab?.toggleFullscreen) await tab.toggleFullscreen();
+}
+
+function onTabFullscreenChange(tabId: string, on: boolean) {
+  tabFullscreen.value = { ...tabFullscreen.value, [tabId]: on };
+  if (!on) {
+    void nextTick(() => {
+      tabRefs.value[tabId]?.relayout?.();
+    });
+  }
+}
 
 const broadcastMode = ref(false);
 const tabRefs = ref<Record<string, any>>({});
@@ -1378,6 +1406,7 @@ async function deleteIdentityRow(id: string) {
   <LoginForm v-else-if="!loggedIn" @logged-in="onLoggedIn" />
   <div v-else class="flex h-screen min-h-0 flex-col bg-surface font-sans">
     <header
+      v-show="!sessionFullscreen"
       class="flex shrink-0 items-center justify-between border-b border-slate-800 bg-surface-raised px-3 py-2 md:px-4"
     >
       <div class="flex min-w-0 items-center gap-2">
@@ -1520,12 +1549,13 @@ async function deleteIdentityRow(id: string) {
     </header>
     <div class="relative flex min-h-0 flex-1">
       <div
-        v-show="sidebarOpen"
+        v-show="sidebarOpen && !sessionFullscreen"
         class="fixed inset-0 top-14 z-30 bg-black/50 md:hidden"
         aria-hidden="true"
         @click="sidebarOpen = false"
       />
       <aside
+        v-show="!sessionFullscreen"
         id="hosts-sidebar"
         class="flex w-72 shrink-0 flex-col border-r border-slate-800 bg-surface-raised transition-all duration-200 ease-out max-md:fixed max-md:bottom-0 max-md:left-0 max-md:top-14 max-md:z-40 max-md:max-h-[calc(100dvh-3.5rem)] max-md:shadow-2xl md:relative"
         :class="
@@ -1741,35 +1771,47 @@ async function deleteIdentityRow(id: string) {
         <template v-else>
           <p v-if="popoutErr" class="shrink-0 px-3 py-1 text-xs text-red-400">{{ popoutErr }}</p>
           <div
-            class="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-800 bg-surface-raised px-2 pt-2"
+            v-show="!sessionFullscreen"
+            class="flex shrink-0 items-stretch border-b border-slate-800 bg-surface-raised px-2 pt-2"
           >
+            <div class="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+              <button
+                v-for="t in tabs"
+                :key="t.id"
+                type="button"
+                draggable="true"
+                @dragstart="onTabDragStart(t.id)"
+                @dragover.prevent
+                @drop="onTabDrop(t.id)"
+                @dragend="onTabDragEnd"
+                class="flex items-center gap-2 rounded-t-lg border border-b-0 px-3 py-2 text-sm transition-colors"
+                :class="[
+                  popouts[t.id]
+                    ? 'border-slate-700/80 bg-slate-900 text-slate-300'
+                    : activePanes.includes(t.id)
+                      ? 'border-slate-700 bg-surface text-white'
+                      : 'border-transparent bg-transparent text-slate-400 hover:text-white',
+                  draggedTabId && draggedTabId !== t.id ? 'hover:bg-slate-800/50' : ''
+                ]"
+                @click="onTabClick(t.id)"
+                @contextmenu="onTabContext($event, t.id)"
+              >
+                <SquareArrowOutUpRight v-if="popouts[t.id]" class="h-3 w-3 shrink-0 text-slate-500" />
+                {{ t.label }}
+                <span
+                  class="rounded px-1 text-slate-500 hover:bg-slate-800 hover:text-white"
+                  @click.stop="closeTab(t.id)"
+                >×</span>
+              </button>
+            </div>
             <button
-              v-for="t in tabs"
-              :key="t.id"
+              v-if="primaryTabId()"
               type="button"
-              draggable="true"
-              @dragstart="onTabDragStart(t.id)"
-              @dragover.prevent
-              @drop="onTabDrop(t.id)"
-              @dragend="onTabDragEnd"
-              class="flex items-center gap-2 rounded-t-lg border border-b-0 px-3 py-2 text-sm transition-colors"
-              :class="[
-                popouts[t.id]
-                  ? 'border-slate-700/80 bg-slate-900 text-slate-300'
-                  : activePanes.includes(t.id)
-                    ? 'border-slate-700 bg-surface text-white'
-                    : 'border-transparent bg-transparent text-slate-400 hover:text-white',
-                draggedTabId && draggedTabId !== t.id ? 'hover:bg-slate-800/50' : ''
-              ]"
-              @click="onTabClick(t.id)"
-              @contextmenu="onTabContext($event, t.id)"
+              class="mb-0.5 ml-2 shrink-0 self-center rounded-lg border border-slate-700 bg-surface px-2.5 py-2 text-slate-300 hover:bg-slate-800 hover:text-white"
+              title="Fullscreen"
+              @click="toggleSessionFullscreen"
             >
-              <SquareArrowOutUpRight v-if="popouts[t.id]" class="h-3 w-3 shrink-0 text-slate-500" />
-              {{ t.label }}
-              <span
-                class="rounded px-1 text-slate-500 hover:bg-slate-800 hover:text-white"
-                @click.stop="closeTab(t.id)"
-              >×</span>
+              <Maximize2 class="h-4 w-4" />
             </button>
           </div>
           <div
@@ -1795,7 +1837,10 @@ async function deleteIdentityRow(id: string) {
               Pop in
             </button>
           </div>
-          <div class="relative min-h-0 flex-1 flex flex-row gap-2 p-2 md:p-3">
+          <div
+            class="relative min-h-0 flex-1 flex flex-row gap-2"
+            :class="sessionFullscreen ? 'p-0 gap-0' : 'p-2 md:p-3'"
+          >
             <div
               v-for="t in tabs"
               v-show="activePanes.includes(t.id) && !popouts[t.id]"
@@ -1812,6 +1857,7 @@ async function deleteIdentityRow(id: string) {
                   :popped-out="!!popouts[t.id]"
                   :settings="appSettings"
                   @broadcast-data="(data: string) => handleBroadcast(data, t.id)"
+                  @fullscreen-change="(on: boolean) => onTabFullscreenChange(t.id, on)"
                 />
               </Teleport>
             </div>

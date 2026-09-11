@@ -11,6 +11,13 @@ import {
   nextTick,
 } from "vue";
 import { api, sessionToken, wsOrigin, wsURL, type HostProtocol, type Settings } from "@/api";
+import {
+  fullscreenElementOf,
+  type FullscreenDocument,
+  type FullscreenHost,
+  useMacNativeFullscreen,
+  wailsRuntime,
+} from "@/fullscreen";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -34,7 +41,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "broadcast-data", data: string): void;
+  (e: "fullscreen-change", on: boolean): void;
 }>();
+
+function notifyFullscreenChange() {
+  emit("fullscreen-change", isFullscreen.value);
+}
 
 defineExpose({
   sendData: (data: string) => {
@@ -44,6 +56,10 @@ defineExpose({
   },
   reconnect,
   relayout,
+  toggleFullscreen,
+  exitFullscreen,
+  enterFullscreen,
+  isFullscreen: () => isFullscreen.value,
 });
 
 type HostKeyPrompt = {
@@ -67,6 +83,7 @@ const hostKeyPrompt = ref<HostKeyPrompt | null>(null);
 const showSearch = ref(false);
 const searchQuery = ref("");
 const isFullscreen = ref(false);
+const fullscreenReveal = ref(false);
 
 let ws: WebSocket | null = null;
 let term: Terminal | null = null;
@@ -875,36 +892,25 @@ function runSearch(dir: "next" | "prev") {
   else searchAddon.findPrevious(q);
 }
 
-type FullscreenDocument = Document & {
-  webkitFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => Promise<void> | void;
-};
-
-type FullscreenHost = HTMLElement & {
-  webkitRequestFullscreen?: () => Promise<void> | void;
-};
-
-function fullscreenElementOf(doc: Document): Element | null {
-  const d = doc as FullscreenDocument;
-  return d.fullscreenElement || d.webkitFullscreenElement || null;
-}
-
-function wailsRuntime(): WailsRuntime | undefined {
-  return window.runtime;
-}
-
-function useMacNativeFullscreen(): boolean {
-  return typeof wailsRuntime()?.WindowFullscreen === "function" && /Mac/i.test(navigator.userAgent);
-}
-
 async function syncMacNativeFullscreen() {
   const rt = wailsRuntime();
   if (!rt?.WindowIsFullscreen) return;
   try {
     isFullscreen.value = !!(await rt.WindowIsFullscreen());
+    notifyFullscreenChange();
   } catch {
     /* ignore */
   }
+}
+
+async function enterFullscreen() {
+  if (isFullscreen.value) return;
+  await toggleFullscreen();
+}
+
+async function exitFullscreen() {
+  if (!isFullscreen.value) return;
+  await toggleFullscreen();
 }
 
 async function toggleFullscreen() {
@@ -917,6 +923,7 @@ async function toggleFullscreen() {
       if (on) rt.WindowUnfullscreen?.();
       else rt.WindowFullscreen?.();
       isFullscreen.value = !on;
+      notifyFullscreenChange();
       nextTick(() => {
         fitAndResize();
         fitGuacDisplay();
@@ -944,6 +951,7 @@ async function toggleFullscreen() {
 function onFullscreenChange() {
   const doc = sessionPane.value?.ownerDocument || document;
   isFullscreen.value = fullscreenElementOf(doc) === sessionPane.value;
+  notifyFullscreenChange();
   nextTick(() => {
     fitAndResize();
     fitGuacDisplay();
@@ -1171,19 +1179,26 @@ watch(
       >
         {{ status }}
       </div>
-      <button
-        v-if="!poppedOut"
-        type="button"
-        class="absolute right-3 top-2 z-10 rounded bg-black/70 p-1.5 text-slate-300 hover:bg-black/80 hover:text-white"
-        :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
-        @click="toggleFullscreen"
+      <div
+        v-if="isFullscreen || poppedOut"
+        class="fixed left-0 top-0 z-[100] h-16 w-28"
+        @mouseenter="fullscreenReveal = true"
+        @mouseleave="fullscreenReveal = false"
       >
-        <Minimize2 v-if="isFullscreen" class="h-4 w-4" />
-        <Maximize2 v-else class="h-4 w-4" />
-      </button>
+        <button
+          v-show="fullscreenReveal"
+          type="button"
+          class="absolute left-2 top-2 rounded bg-black/80 p-1.5 text-slate-200 shadow-lg hover:bg-black hover:text-white"
+          :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+          @click="toggleFullscreen"
+        >
+          <Minimize2 v-if="isFullscreen" class="h-4 w-4" />
+          <Maximize2 v-else class="h-4 w-4" />
+        </button>
+      </div>
       <div
         v-if="showSearch && protocol === 'ssh'"
-        class="absolute left-3 right-12 top-2 z-20 flex items-center gap-1 rounded border border-slate-700 bg-slate-900/95 p-1"
+        class="absolute left-3 right-3 top-2 z-20 flex items-center gap-1 rounded border border-slate-700 bg-slate-900/95 p-1"
       >
         <Search class="h-3.5 w-3.5 shrink-0 text-slate-500" />
         <input
