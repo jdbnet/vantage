@@ -584,8 +584,6 @@ const GUAC_META_L = 0xffe7;
 const GUAC_META_R = 0xffe8;
 const GUAC_SUPER_L = 0xffeb;
 const GUAC_SUPER_R = 0xffec;
-const GUAC_KEY_C = 0x63;
-const GUAC_KEY_C_SHIFT = 0x43;
 const GUAC_KEY_V = 0x76;
 const GUAC_KEY_V_SHIFT = 0x56;
 
@@ -600,10 +598,6 @@ function isGuacMeta(keysym: number): boolean {
     keysym === GUAC_SUPER_L ||
     keysym === GUAC_SUPER_R
   );
-}
-
-function isGuacC(keysym: number): boolean {
-  return keysym === GUAC_KEY_C || keysym === GUAC_KEY_C_SHIFT;
 }
 
 function isGuacV(keysym: number): boolean {
@@ -808,15 +802,27 @@ function attachGuacInput(displayEl: HTMLElement) {
           return;
         }
         if (isGuacMeta(keysym)) {
+          // Hold Command locally only. Forwarding it opens the Windows Start menu.
           guacMetaDown = true;
-          guacClient?.sendKeyEvent(1, keysym);
           return;
         }
-        if (isGuacC(keysym) && guacMetaDown) {
+        if (guacMetaDown) {
+          if (isGuacV(keysym)) {
+            guacPastePending = true;
+            guacPasteKeysym = keysym;
+            armGuacClipboardCapture();
+            scheduleGuacPasteFallback(keysym);
+            void readClipboard(sessionWin()).then((text) => {
+              if (guacPastePending && text) {
+                finishGuacPaste(text, keysym);
+              }
+            });
+            return true;
+          }
           sendGuacCtrlChord(keysym);
           return;
         }
-        if (isGuacV(keysym) && (guacCtrlDown || guacMetaDown)) {
+        if (isGuacV(keysym) && guacCtrlDown) {
           guacPastePending = true;
           guacPasteKeysym = keysym;
           armGuacClipboardCapture();
@@ -831,9 +837,17 @@ function attachGuacInput(displayEl: HTMLElement) {
         guacClient?.sendKeyEvent(1, keysym);
       },
       keyup: (keysym: number) => {
-        if (isGuacCtrl(keysym)) guacCtrlDown = false;
-        if (isGuacMeta(keysym)) guacMetaDown = false;
+        if (isGuacCtrl(keysym)) {
+          guacCtrlDown = false;
+          guacClient?.sendKeyEvent(0, keysym);
+          return;
+        }
+        if (isGuacMeta(keysym)) {
+          guacMetaDown = false;
+          return;
+        }
         if (isGuacV(keysym) && guacPastePending) return;
+        if (guacMetaDown) return;
         guacClient?.sendKeyEvent(0, keysym);
       },
     };
