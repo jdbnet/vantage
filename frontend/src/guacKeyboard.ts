@@ -2,7 +2,7 @@ import Guacamole from "guacamole-common-js";
 
 export type GuacKeySink = {
   isActive: () => boolean;
-  /** Return true to allow the browser default (needed for Ctrl/Cmd+V paste). */
+  /** Return true to allow the browser default (needed for Ctrl/Cmd+V paste capture). */
   keydown: (keysym: number) => boolean | void;
   keyup: (keysym: number) => void;
 };

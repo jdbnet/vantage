@@ -17,6 +17,39 @@ static NSMutableArray *gOwners;
 static NSWindow *gMainWindow;
 static BOOL gAppObserversRegistered;
 
+@interface VantagePopoutWebView : WKWebView
+@end
+
+@implementation VantagePopoutWebView
+
+- (BOOL)vantage_sendEditAction:(SEL)action {
+	return [[NSApplication sharedApplication] sendAction:action to:nil from:self];
+}
+
+- (BOOL)performKeyEquivalent:(NSEvent *)event {
+	if (event.modifierFlags & NSEventModifierFlagCommand) {
+		NSString *key = event.charactersIgnoringModifiers;
+		if ([key isEqualToString:@"c"]) {
+			return [self vantage_sendEditAction:@selector(copy:)];
+		}
+		if ([key isEqualToString:@"v"]) {
+			return [self vantage_sendEditAction:@selector(paste:)];
+		}
+		if ([key isEqualToString:@"x"]) {
+			return [self vantage_sendEditAction:@selector(cut:)];
+		}
+		if ([key isEqualToString:@"a"]) {
+			return [self vantage_sendEditAction:@selector(selectAll:)];
+		}
+		if ([key isEqualToString:@"z"]) {
+			return [self vantage_sendEditAction:@selector(undo:)];
+		}
+	}
+	return [super performKeyEquivalent:event];
+}
+
+@end
+
 @interface VantagePopoutOwner : NSObject <NSWindowDelegate>
 @property(strong) NSWindow *window;
 @property(strong) WKWebView *webView;
@@ -282,7 +315,8 @@ static WKWebView *vantage_make_popout(WKWebView *parent, WKWebViewConfiguration 
 	if (@available(macOS 12.3, *)) {
 		configuration.preferences.elementFullscreenEnabled = YES;
 	}
-	WKWebView *child = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, width, height) configuration:configuration];
+	WKWebView *child = [[VantagePopoutWebView alloc] initWithFrame:NSMakeRect(0, 0, width, height)
+	                                                     configuration:configuration];
 	child.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 	vantage_install_child_delegate(child, parent);
 	window.contentView = child;

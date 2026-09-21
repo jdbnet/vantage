@@ -10,6 +10,7 @@ import (
 
 	"github.com/jdbnet/vantage/internal/appcore"
 	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
@@ -33,6 +34,13 @@ func main() {
 		}
 	}()
 
+	var appMenu *menu.Menu
+	if runtime.GOOS == "darwin" {
+		appMenu = menu.NewMenu()
+		appMenu.Append(menu.AppMenu())
+		appMenu.Append(menu.EditMenu())
+	}
+
 	err = wails.Run(&options.App{
 		Title:     "Vantage",
 		Width:     1400,
@@ -45,6 +53,7 @@ func main() {
 			Handler: core.Handler(),
 		},
 		BackgroundColour: &options.RGBA{R: 13, G: 17, B: 23, A: 255},
+		Menu:             appMenu,
 		Mac: &mac.Options{
 			Preferences: &mac.Preferences{
 				FullscreenEnabled: mac.Enabled,
