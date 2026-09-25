@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import { File, Folder } from "@lucide/vue";
+import { Download, File, Folder, Pencil, Trash2 } from "@lucide/vue";
 import { api, apiFetch, type SftpEntry } from "@/api";
 import { saveBlobAsFile } from "@/download";
 
@@ -253,24 +253,30 @@ function fmtSize(n: number): string {
           <button
             v-if="!isDir(e.st_mode)"
             type="button"
-            class="shrink-0 text-[10px] text-slate-500 opacity-0 group-hover:opacity-100 hover:text-accent"
+            class="shrink-0 rounded p-1 text-slate-500 opacity-0 group-hover:opacity-100 hover:bg-slate-800 hover:text-accent"
+            title="Download"
+            aria-label="Download"
             @click="downloadFile(e)"
           >
-            Get
+            <Download class="h-3.5 w-3.5" aria-hidden="true" />
           </button>
           <button
             type="button"
-            class="shrink-0 text-[10px] text-slate-500 opacity-0 group-hover:opacity-100 hover:text-accent"
+            class="shrink-0 rounded p-1 text-slate-500 opacity-0 group-hover:opacity-100 hover:bg-slate-800 hover:text-accent"
+            title="Rename"
+            aria-label="Rename"
             @click="startRename(e)"
           >
-            Ren
+            <Pencil class="h-3.5 w-3.5" aria-hidden="true" />
           </button>
           <button
             type="button"
-            class="shrink-0 text-[10px] text-red-400/80 opacity-0 group-hover:opacity-100"
+            class="shrink-0 rounded p-1 text-slate-500 opacity-0 group-hover:opacity-100 hover:bg-slate-800 hover:text-red-400"
+            title="Delete"
+            aria-label="Delete"
             @click="removeEntry(e)"
           >
-            Del
+            <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         </li>
       </ul>
