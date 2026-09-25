@@ -584,6 +584,8 @@ const GUAC_META_L = 0xffe7;
 const GUAC_META_R = 0xffe8;
 const GUAC_SUPER_L = 0xffeb;
 const GUAC_SUPER_R = 0xffec;
+const GUAC_KEY_C = 0x63;
+const GUAC_KEY_C_SHIFT = 0x43;
 const GUAC_KEY_V = 0x76;
 const GUAC_KEY_V_SHIFT = 0x56;
 
@@ -600,6 +602,10 @@ function isGuacMeta(keysym: number): boolean {
   );
 }
 
+function isGuacC(keysym: number): boolean {
+  return keysym === GUAC_KEY_C || keysym === GUAC_KEY_C_SHIFT;
+}
+
 function isGuacV(keysym: number): boolean {
   return keysym === GUAC_KEY_V || keysym === GUAC_KEY_V_SHIFT;
 }
@@ -612,11 +618,6 @@ function sendGuacClipboard(text: string) {
   const writer = new Guacamole.StringWriter(stream);
   writer.sendText(text);
   writer.sendEnd();
-}
-
-function sendGuacVKey(keysym: number) {
-  guacClient?.sendKeyEvent(1, keysym);
-  guacClient?.sendKeyEvent(0, keysym);
 }
 
 function sendGuacCtrlChord(keyKeysym: number) {
@@ -640,7 +641,7 @@ function finishGuacPaste(text: string, keysym: number) {
     sendGuacClipboard(text);
   }
   sessionWin().setTimeout(() => {
-    sendGuacVKey(keysym);
+    sendGuacCtrlChord(keysym);
     guacEl.value?.focus({ preventScroll: true });
   }, 30);
 }
@@ -822,6 +823,10 @@ function attachGuacInput(displayEl: HTMLElement) {
           sendGuacCtrlChord(keysym);
           return;
         }
+        if (isGuacC(keysym) && guacCtrlDown) {
+          sendGuacCtrlChord(keysym);
+          return;
+        }
         if (isGuacV(keysym) && guacCtrlDown) {
           guacPastePending = true;
           guacPasteKeysym = keysym;
@@ -847,6 +852,7 @@ function attachGuacInput(displayEl: HTMLElement) {
           return;
         }
         if (isGuacV(keysym) && guacPastePending) return;
+        if (isGuacC(keysym) && guacCtrlDown) return;
         if (guacMetaDown) return;
         guacClient?.sendKeyEvent(0, keysym);
       },
@@ -1107,6 +1113,11 @@ function createSshTerminal() {
       if (key === "c") {
         if (ev.type === "keydown" && term?.hasSelection()) {
           void writeClipboard(sessionWin(), term.getSelection());
+        }
+        if (ev.ctrlKey) {
+          return true;
+        }
+        if (ev.type === "keydown") {
           ev.preventDefault();
         }
         return false;
