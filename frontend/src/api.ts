@@ -31,6 +31,10 @@ function isWailsOrigin(): boolean {
   );
 }
 
+export function isDesktopShell(): boolean {
+  return isWailsOrigin();
+}
+
 function normalizeListen(addr: string): string {
   let a = addr.trim();
   a = a.replace(/^https?:\/\//, "");

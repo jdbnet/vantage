@@ -34,6 +34,8 @@ func main() {
 		}
 	}()
 
+	desktop := NewDesktop()
+
 	var appMenu *menu.Menu
 	if runtime.GOOS == "darwin" {
 		appMenu = menu.NewMenu()
@@ -59,10 +61,15 @@ func main() {
 				FullscreenEnabled: mac.Enabled,
 			},
 		},
+		Bind: []interface{}{
+			desktop,
+		},
 		OnStartup: func(ctx context.Context) {
+			desktop.setContext(ctx)
 			enableWebkitPopouts()
 		},
 		OnDomReady: func(ctx context.Context) {
+			desktop.setContext(ctx)
 			enableWebkitPopouts()
 		},
 		OnShutdown: func(ctx context.Context) {

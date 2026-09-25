@@ -20,6 +20,7 @@ import TagInput from "@/components/TagInput.vue";
 import SnippetForm from "@/components/SnippetForm.vue";
 import { applyAccent, DEFAULT_ACCENT, normalizeAccent } from "@/theme";
 import { openPopout, type PopoutHandle } from "@/popout";
+import { saveBlobAsFile } from "@/download";
 
 interface TabItem {
   id: string;
@@ -1044,12 +1045,7 @@ async function downloadBackup() {
   }
   try {
     const blob = await api.exportInventory();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "vantage-backup.json";
-    a.click();
-    URL.revokeObjectURL(url);
+    await saveBlobAsFile(blob, "vantage-backup.json");
   } catch (e) {
     backupErr.value = e instanceof Error ? e.message : "Export failed";
   }
