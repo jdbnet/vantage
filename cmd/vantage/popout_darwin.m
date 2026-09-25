@@ -22,27 +22,14 @@ static BOOL gAppObserversRegistered;
 
 @implementation VantagePopoutWebView
 
-- (BOOL)vantage_sendEditAction:(SEL)action {
-	return [[NSApplication sharedApplication] sendAction:action to:nil from:self];
-}
-
 - (BOOL)performKeyEquivalent:(NSEvent *)event {
 	if (event.modifierFlags & NSEventModifierFlagCommand) {
 		NSString *key = event.charactersIgnoringModifiers;
-		if ([key isEqualToString:@"c"]) {
-			return [self vantage_sendEditAction:@selector(copy:)];
-		}
-		if ([key isEqualToString:@"v"]) {
-			return [self vantage_sendEditAction:@selector(paste:)];
-		}
-		if ([key isEqualToString:@"x"]) {
-			return [self vantage_sendEditAction:@selector(cut:)];
-		}
-		if ([key isEqualToString:@"a"]) {
-			return [self vantage_sendEditAction:@selector(selectAll:)];
-		}
-		if ([key isEqualToString:@"z"]) {
-			return [self vantage_sendEditAction:@selector(undo:)];
+		if ([key isEqualToString:@"c"] || [key isEqualToString:@"v"] || [key isEqualToString:@"x"] ||
+		    [key isEqualToString:@"a"] || [key isEqualToString:@"z"]) {
+			// Route as normal key events so session paste/copy handlers run instead of
+			// showing the WKWebView "Paste" callout from -paste:.
+			return NO;
 		}
 	}
 	return [super performKeyEquivalent:event];

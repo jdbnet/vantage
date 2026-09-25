@@ -6,7 +6,15 @@ import {
   watch,
   nextTick,
 } from "vue";
-import { api, sessionToken, wsOrigin, wsURL, type HostProtocol, type Settings } from "@/api";
+import {
+  api,
+  isDesktopShell,
+  sessionToken,
+  wsOrigin,
+  wsURL,
+  type HostProtocol,
+  type Settings,
+} from "@/api";
 import {
   fullscreenElementOf,
   type FullscreenDocument,
@@ -647,6 +655,7 @@ function finishGuacPaste(text: string, keysym: number) {
 }
 
 function armGuacClipboardCapture() {
+  if (isDesktopShell()) return;
   const el = guacClipboardEl.value;
   if (!el) return;
   el.value = "";
@@ -658,9 +667,22 @@ function scheduleGuacPasteFallback(keysym: number) {
   guacPasteFallbackTimer = window.setTimeout(() => {
     guacPasteFallbackTimer = null;
     if (!guacPastePending) return;
-    const dumped = guacClipboardEl.value?.value || sharedClipboardText() || "";
+    const dumped = isDesktopShell()
+      ? sharedClipboardText()
+      : guacClipboardEl.value?.value || sharedClipboardText() || "";
     finishGuacPaste(dumped, keysym);
   }, 80);
+}
+
+function startGuacPaste(keysym: number) {
+  guacPastePending = true;
+  guacPasteKeysym = keysym;
+  armGuacClipboardCapture();
+  scheduleGuacPasteFallback(keysym);
+  void readClipboard(sessionWin()).then((text) => {
+    if (!guacPastePending) return;
+    finishGuacPaste(text, keysym);
+  });
 }
 
 function onGuacPaste(ev: ClipboardEvent) {
@@ -809,16 +831,8 @@ function attachGuacInput(displayEl: HTMLElement) {
         }
         if (guacMetaDown) {
           if (isGuacV(keysym)) {
-            guacPastePending = true;
-            guacPasteKeysym = keysym;
-            armGuacClipboardCapture();
-            scheduleGuacPasteFallback(keysym);
-            void readClipboard(sessionWin()).then((text) => {
-              if (guacPastePending && text) {
-                finishGuacPaste(text, keysym);
-              }
-            });
-            return true;
+            startGuacPaste(keysym);
+            return;
           }
           sendGuacCtrlChord(keysym);
           return;
@@ -828,16 +842,8 @@ function attachGuacInput(displayEl: HTMLElement) {
           return;
         }
         if (isGuacV(keysym) && guacCtrlDown) {
-          guacPastePending = true;
-          guacPasteKeysym = keysym;
-          armGuacClipboardCapture();
-          scheduleGuacPasteFallback(keysym);
-          void readClipboard(sessionWin()).then((text) => {
-            if (guacPastePending && text) {
-              finishGuacPaste(text, keysym);
-            }
-          });
-          return true;
+          startGuacPaste(keysym);
+          return;
         }
         guacClient?.sendKeyEvent(1, keysym);
       },
@@ -1390,7 +1396,9 @@ watch(
           tabindex="-1"
           aria-hidden="true"
           autocomplete="off"
+          readonly
           @paste="onGuacPaste"
+          @contextmenu.prevent
         />
       </div>
     </div>
