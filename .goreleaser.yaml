@@ -83,6 +83,8 @@ changelog:
   disable: true
 
 release:
+  prerelease: true
+  make_latest: false
   github:
     owner: jdbnet
     name: vantage
