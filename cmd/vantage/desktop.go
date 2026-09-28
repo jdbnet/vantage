@@ -44,3 +44,24 @@ func (d *Desktop) SaveFile(defaultFilename string, data []byte) (string, error) 
 	}
 	return path, nil
 }
+
+// ReadClipboard returns the host system clipboard as plain text.
+func (d *Desktop) ReadClipboard() (string, error) {
+	if d.ctx == nil {
+		return "", errors.New("desktop shell not ready")
+	}
+	text, err := runtime.ClipboardGetText(d.ctx)
+	if err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
+// WriteClipboard sets the host system clipboard to plain text.
+func (d *Desktop) WriteClipboard(text string) error {
+	if d.ctx == nil {
+		return errors.New("desktop shell not ready")
+	}
+	runtime.ClipboardSetText(d.ctx, text)
+	return nil
+}

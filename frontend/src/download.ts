@@ -1,15 +1,5 @@
 import { isDesktopShell } from "@/api";
-
-type DesktopSave = {
-  SaveFile: (defaultFilename: string, data: number[]) => Promise<string>;
-};
-
-function desktopSave(): DesktopSave | undefined {
-  const w = window as Window & {
-    go?: { main?: { Desktop?: DesktopSave } };
-  };
-  return w.go?.main?.Desktop;
-}
+import { getDesktopBridge } from "@/desktopBridge";
 
 function saveBlobInBrowser(blob: Blob, filename: string) {
   const href = URL.createObjectURL(blob);
@@ -22,7 +12,7 @@ function saveBlobInBrowser(blob: Blob, filename: string) {
 
 export async function saveBlobAsFile(blob: Blob, filename: string): Promise<void> {
   if (isDesktopShell()) {
-    const bridge = desktopSave();
+    const bridge = getDesktopBridge();
     if (!bridge?.SaveFile) {
       throw new Error("Desktop save dialog is unavailable");
     }

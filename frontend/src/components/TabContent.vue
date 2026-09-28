@@ -513,13 +513,21 @@ function onSshPaste(ev: ClipboardEvent) {
   const fromEvent = ev.clipboardData?.getData("text/plain") || "";
   if (fromEvent) {
     rememberClipboard(fromEvent);
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    pasteSsh(fromEvent);
     return;
   }
   const fallback = sharedClipboardText() || term.getSelection() || sshPrimaryText;
-  if (!fallback) return;
   ev.preventDefault();
   ev.stopImmediatePropagation();
-  pasteSsh(fallback);
+  if (fallback) {
+    pasteSsh(fallback);
+    return;
+  }
+  void readClipboard(sessionWin()).then((text) => {
+    if (text) pasteSsh(text);
+  });
 }
 
 function onSshMiddleClick(ev: MouseEvent) {
