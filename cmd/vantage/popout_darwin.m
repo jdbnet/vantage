@@ -16,6 +16,8 @@ static char kAttacherKey;
 static NSMutableArray *gOwners;
 static NSWindow *gMainWindow;
 static BOOL gAppObserversRegistered;
+static BOOL gKeyEquivSwizzled;
+static IMP gOrigPerformKeyEquivalent;
 
 @interface VantagePopoutWebView : WKWebView
 @end
@@ -27,8 +29,6 @@ static BOOL gAppObserversRegistered;
 		NSString *key = event.charactersIgnoringModifiers;
 		if ([key isEqualToString:@"c"] || [key isEqualToString:@"v"] || [key isEqualToString:@"x"] ||
 		    [key isEqualToString:@"a"] || [key isEqualToString:@"z"]) {
-			// Route as normal key events so session paste/copy handlers run instead of
-			// showing the WKWebView "Paste" callout from -paste:.
 			return NO;
 		}
 	}
@@ -36,6 +36,31 @@ static BOOL gAppObserversRegistered;
 }
 
 @end
+
+static BOOL vantage_wk_performKeyEquivalent(id self, SEL _cmd, NSEvent *event) {
+	if (event.modifierFlags & NSEventModifierFlagCommand) {
+		NSString *key = event.charactersIgnoringModifiers;
+		if ([key isEqualToString:@"c"] || [key isEqualToString:@"v"] || [key isEqualToString:@"x"] ||
+		    [key isEqualToString:@"a"] || [key isEqualToString:@"z"]) {
+			return NO;
+		}
+	}
+	return ((BOOL (*)(id, SEL, NSEvent *))gOrigPerformKeyEquivalent)(self, _cmd, event);
+}
+
+static void vantage_swizzle_wkwebview_keyequiv(void) {
+	if (gKeyEquivSwizzled) {
+		return;
+	}
+	gKeyEquivSwizzled = YES;
+	Class cls = [WKWebView class];
+	Method method = class_getInstanceMethod(cls, @selector(performKeyEquivalent:));
+	if (!method) {
+		return;
+	}
+	gOrigPerformKeyEquivalent = method_getImplementation(method);
+	method_setImplementation(method, (IMP)vantage_wk_performKeyEquivalent);
+}
 
 @interface VantagePopoutOwner : NSObject <NSWindowDelegate>
 @property(strong) NSWindow *window;
@@ -389,6 +414,7 @@ static BOOL vantage_attach_all(void) {
 
 void vantage_enable_webkit_popouts(void) {
 	dispatch_async(dispatch_get_main_queue(), ^{
+		vantage_swizzle_wkwebview_keyequiv();
 		vantage_register_app_observers();
 		VantagePopoutAttacher *existing = objc_getAssociatedObject(NSApp, &kAttacherKey);
 		if (existing) {
