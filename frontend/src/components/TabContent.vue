@@ -107,6 +107,7 @@ let pingInterval: number | null = null;
 let guacClient: InstanceType<typeof Guacamole.Client> | null = null;
 let guacKeySink: GuacKeySink | null = null;
 let guacPasteHandler: ((ev: ClipboardEvent) => void) | null = null;
+let guacCopyHandler: ((ev: ClipboardEvent) => void) | null = null;
 let guacFocusHandler: ((ev: Event) => void) | null = null;
 let guacOutsideClick: ((ev: MouseEvent) => void) | null = null;
 let guacPasteDoc: Document | null = null;
@@ -127,6 +128,7 @@ let sessionClipboardKeyHandler: ((ev: KeyboardEvent) => void) | null = null;
 let sessionClipboardKeyDoc: Document | null = null;
 let sessionMacKeyHandler: ((ev: KeyboardEvent) => void) | null = null;
 let sessionMacKeyEl: HTMLElement | null = null;
+let guacDomMetaHandler: ((ev: KeyboardEvent) => void) | null = null;
 let lastPushedClipboard = "";
 let sessionAlive = true;
 let sshPrimaryText = "";
@@ -475,6 +477,16 @@ function guacDisplayFocused(): boolean {
   return guacInputActive && props.visible;
 }
 
+function guacClipboardShortcutReady(target: EventTarget | null): boolean {
+  if (!props.visible || isSSH()) return false;
+  const wrap = guacEl.value;
+  if (!wrap) return false;
+  if (guacInputActive) return true;
+  if (target instanceof Node && wrap.contains(target)) return true;
+  const ae = sessionDoc().activeElement;
+  return ae instanceof Node && wrap.contains(ae);
+}
+
 function isEditableTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
   if (el === guacClipboardEl.value) return false;
@@ -753,7 +765,7 @@ function onSessionClipboardKey(ev: KeyboardEvent) {
   if (key === "v") {
     if (isSSH()) {
       if (!sshTermActive(ev.target)) return;
-    } else if (!guacDisplayFocused()) {
+    } else if (!guacClipboardShortcutReady(ev.target)) {
       return;
     }
     ev.preventDefault();
@@ -771,7 +783,7 @@ function onSessionClipboardKey(ev: KeyboardEvent) {
     runSessionCopy(ev);
     return;
   }
-  if (!guacDisplayFocused()) return;
+  if (!guacClipboardShortcutReady(ev.target)) return;
   ev.preventDefault();
   ev.stopImmediatePropagation();
   runSessionCopy(ev);
@@ -787,7 +799,7 @@ function onMacCommandShortcut(ev: KeyboardEvent) {
 
   if (isSSH()) {
     if (!sshTermActive(ev.target)) return;
-  } else if (!guacDisplayFocused()) {
+  } else if (!guacClipboardShortcutReady(ev.target)) {
     return;
   }
 
@@ -798,6 +810,30 @@ function onMacCommandShortcut(ev: KeyboardEvent) {
     return;
   }
   runSessionCopy(ev);
+}
+
+function bindGuacDomMetaShortcuts(wrap: HTMLElement) {
+  if (guacDomMetaHandler) {
+    wrap.removeEventListener("keydown", guacDomMetaHandler, true);
+  }
+  guacDomMetaHandler = (ev: KeyboardEvent) => {
+    if (!isMacDesktop() || ev.type !== "keydown") return;
+    if (!ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    if (!guacClipboardShortcutReady(ev.target)) return;
+    const key = ev.key.toLowerCase();
+    if (key === "v") {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      startGuacPaste(GUAC_KEY_V);
+      return;
+    }
+    if (key === "c") {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      sendGuacCtrlChord(ev.shiftKey ? GUAC_KEY_C_SHIFT : GUAC_KEY_C);
+    }
+  };
+  wrap.addEventListener("keydown", guacDomMetaHandler, true);
 }
 
 function bindSessionMacCommandKeys(el: HTMLElement | null) {
@@ -823,11 +859,8 @@ function bindSessionClipboardKeys() {
 }
 
 function onGuacPaste(ev: ClipboardEvent) {
-  if (!guacDisplayFocused() || isEditableTarget(ev.target)) return;
-  if (isDesktopShell()) {
-    ev.preventDefault();
-    return;
-  }
+  if (!guacClipboardShortcutReady(ev.target)) return;
+  if (isEditableTarget(ev.target)) return;
   const text = ev.clipboardData?.getData("text/plain") || "";
   ev.preventDefault();
   if (text) rememberClipboard(text);
@@ -835,9 +868,23 @@ function onGuacPaste(ev: ClipboardEvent) {
     finishGuacPaste(text, guacPasteKeysym);
     return;
   }
+  if (isDesktopShell()) {
+    // macOS routes Cmd+V through paste: / Edit menu, not keydown on the canvas.
+    if (isMacDesktop()) {
+      startGuacPaste(GUAC_KEY_V);
+    }
+    return;
+  }
   if (text) {
     sendGuacClipboard(trimClipboardText(text));
   }
+}
+
+function onGuacCopy(ev: ClipboardEvent) {
+  if (!isMacDesktop() || !guacClipboardShortcutReady(ev.target)) return;
+  if (isEditableTarget(ev.target)) return;
+  ev.preventDefault();
+  sendGuacCtrlChord(GUAC_KEY_C);
 }
 
 function disposeGuacInput() {
@@ -851,6 +898,11 @@ function disposeGuacInput() {
     wrap?.removeEventListener("paste", guacPasteHandler);
   }
   guacPasteHandler = null;
+  if (guacCopyHandler) {
+    guacPasteDoc?.removeEventListener("copy", guacCopyHandler, true);
+    wrap?.removeEventListener("copy", guacCopyHandler);
+  }
+  guacCopyHandler = null;
   guacPasteDoc = null;
   if (guacFocusHandler && wrap) {
     wrap.removeEventListener("mousedown", guacFocusHandler);
@@ -866,6 +918,10 @@ function disposeGuacInput() {
   guacCtrlDown = false;
   guacMetaDown = false;
   guacInputActive = false;
+  if (guacDomMetaHandler && wrap) {
+    wrap.removeEventListener("keydown", guacDomMetaHandler, true);
+  }
+  guacDomMetaHandler = null;
   disposeSessionClipboardKeys();
 }
 
@@ -876,16 +932,25 @@ function bindGuacDocEvents() {
   if (guacPasteHandler && guacPasteDoc) {
     guacPasteDoc.removeEventListener("paste", guacPasteHandler, true);
   }
+  if (guacCopyHandler && guacPasteDoc) {
+    guacPasteDoc.removeEventListener("copy", guacCopyHandler, true);
+  }
   if (guacOutsideClick && guacOutsideDoc) {
     guacOutsideDoc.removeEventListener("mousedown", guacOutsideClick, true);
   }
   if (!guacPasteHandler) {
     guacPasteHandler = onGuacPaste;
   }
+  if (!guacCopyHandler) {
+    guacCopyHandler = onGuacCopy;
+  }
   guacPasteDoc = doc;
   doc.addEventListener("paste", guacPasteHandler, true);
   wrap.removeEventListener("paste", guacPasteHandler);
   wrap.addEventListener("paste", guacPasteHandler);
+  doc.addEventListener("copy", guacCopyHandler, true);
+  wrap.removeEventListener("copy", guacCopyHandler);
+  wrap.addEventListener("copy", guacCopyHandler);
   guacOutsideClick = (ev: MouseEvent) => {
     if (!wrap.contains(ev.target as Node) && ev.target !== guacClipboardEl.value) {
       guacInputActive = false;
@@ -957,6 +1022,7 @@ function attachGuacInput(displayEl: HTMLElement) {
     guacFocusHandler = () => armGuacInput();
     wrap.addEventListener("mousedown", guacFocusHandler);
   }
+  bindGuacDomMetaShortcuts(wrap);
   if (!guacKeySink) {
     guacKeySink = {
       isActive: () =>
@@ -974,14 +1040,10 @@ function attachGuacInput(displayEl: HTMLElement) {
         }
         if (guacMetaDown) {
           if (isGuacV(keysym)) {
-            if (!isMacDesktop()) {
-              startGuacPaste(keysym);
-            }
+            startGuacPaste(keysym);
             return;
           }
-          if (!isMacDesktop()) {
-            sendGuacCtrlChord(keysym);
-          }
+          sendGuacCtrlChord(keysym);
           return;
         }
         if (isGuacC(keysym) && guacCtrlDown) {
