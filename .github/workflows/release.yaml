@@ -42,6 +42,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      WAILS_EXP_USE_WAKE: "1"
     steps:
       - uses: actions/checkout@v7
         with:
