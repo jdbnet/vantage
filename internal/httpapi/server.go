@@ -684,7 +684,7 @@ func (s *Server) handlePatchHost(w http.ResponseWriter, r *http.Request) {
 	for k, v := range body {
 		merged[k] = v
 	}
-	if _, ok := body["use_inline_identity"]; !ok && cur.InlineBlob != nil {
+	if keepExistingInline(body, cur.InlineBlob != nil) {
 		merged["use_inline_identity"] = true
 		merged["_keep_inline"] = true
 	}
@@ -709,6 +709,21 @@ func (s *Server) handlePatchHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// keepExistingInline preserves a one-time secret across patches that do not mention credentials.
+// Sending identity_id, or use_inline_identity, replaces that secret.
+func keepExistingInline(body map[string]any, hasInline bool) bool {
+	if !hasInline {
+		return false
+	}
+	if _, ok := body["use_inline_identity"]; ok {
+		return false
+	}
+	if _, ok := body["identity_id"]; ok {
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
