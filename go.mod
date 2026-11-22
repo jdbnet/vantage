@@ -9,7 +9,7 @@ require (
 	github.com/wailsapp/wails/v3 v3.1.0
 	github.com/wwt/guac v1.3.2
 	golang.org/x/crypto v0.59.0
-	modernc.org/sqlite v1.62.0
+	modernc.org/sqlite v1.63.0
 )
 
 require (
