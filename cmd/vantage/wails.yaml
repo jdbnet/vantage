@@ -6,6 +6,7 @@ project:
   identifier: uk.co.jdbnet.vantage
   version: "0.0.0"
   binary_name: vantage
+  icon: build/appicon.png
   company: JDB-NET Limited
   description: SSH, VNC, and RDP client
   copyright: Copyright JDB-NET Limited
