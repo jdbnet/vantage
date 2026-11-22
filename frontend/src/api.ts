@@ -675,6 +675,7 @@ export interface HostRow {
   jump_host_label?: string | null;
   identity_label: string;
   identity_auth_type: string;
+  ssh_username?: string;
   folder_label?: string | null;
   last_connected_at?: string | null;
   tags?: string[];
@@ -684,6 +685,7 @@ export interface IdentityRow {
   id: string;
   label: string;
   auth_type: string;
+  ssh_username?: string;
 }
 
 export interface SnippetRow {

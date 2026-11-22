@@ -36,6 +36,40 @@ func (s *Store) ListIdentities() ([]model.Identity, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) IdentityBlobs() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT id, encrypted_blob FROM identities WHERE deleted_at IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, blob string
+		if err := rows.Scan(&id, &blob); err != nil {
+			return nil, err
+		}
+		out[id] = blob
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) InlineIdentityBlobs() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT id, inline_identity_encrypted_blob FROM hosts WHERE deleted_at IS NULL AND inline_identity_encrypted_blob IS NOT NULL AND inline_identity_encrypted_blob != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, blob string
+		if err := rows.Scan(&id, &blob); err != nil {
+			return nil, err
+		}
+		out[id] = blob
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) GetIdentity(id string) (IdentityRecord, error) {
 	var rec IdentityRecord
 	var pass sql.NullString

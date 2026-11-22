@@ -1177,7 +1177,7 @@ async function openEditIdentity(i: IdentityRow) {
     id: i.id,
     label: i.label,
     auth_type: i.auth_type,
-    ssh_username: "",
+    ssh_username: i.ssh_username || "",
     password: "",
     private_key: "",
     key_passphrase: "",
@@ -1308,7 +1308,7 @@ function openEditHost(h: HostRow) {
     use_inline_identity: hasInlineIdentity,
     identity_id: h.identity_id || "",
     auth_type: (h.identity_auth_type as "password" | "publickey") || "password",
-    ssh_username: "",
+    ssh_username: hasInlineIdentity ? h.ssh_username || "" : "",
     password: "",
     private_key: "",
     key_passphrase: "",
@@ -1696,7 +1696,7 @@ async function deleteIdentityRow(id: string) {
                 <span class="min-w-0 truncate">{{ h.label }}</span>
               </button>
               <div class="mt-0.5 truncate font-mono text-[10px] text-slate-500">
-                {{ h.hostname }}:{{ h.port }} · {{ (h.protocol || "ssh").toUpperCase() }} · {{ h.identity_label }}
+                {{ h.hostname }}:{{ h.port }} · {{ (h.protocol || "ssh").toUpperCase() }} · {{ h.identity_label }}<span v-if="h.ssh_username"> · {{ h.ssh_username }}</span>
               </div>
               <p
                 v-if="h.jump_host_id"
@@ -2133,6 +2133,7 @@ async function deleteIdentityRow(id: string) {
                 <div class="truncate text-sm text-white">{{ i.label }}</div>
                 <div class="text-[11px] text-slate-500">
                   {{ i.auth_type === "publickey" ? "SSH private key" : "Password" }}
+                  <span v-if="i.ssh_username"> · {{ i.ssh_username }}</span>
                 </div>
               </div>
               <div class="flex shrink-0 gap-1">
@@ -2387,7 +2388,7 @@ async function deleteIdentityRow(id: string) {
             class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm"
           >
             <option v-for="i in identities" :key="i.id" :value="i.id">
-              {{ i.label }} ({{ i.auth_type }})
+              {{ i.label }}{{ i.ssh_username ? ` (${i.ssh_username})` : "" }} ({{ i.auth_type }})
             </option>
           </select>
         </div>
@@ -2635,7 +2636,7 @@ async function deleteIdentityRow(id: string) {
             class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm"
           >
             <option v-for="i in identities" :key="i.id" :value="i.id">
-              {{ i.label }} ({{ i.auth_type }})
+              {{ i.label }}{{ i.ssh_username ? ` (${i.ssh_username})` : "" }} ({{ i.auth_type }})
             </option>
           </select>
         </div>

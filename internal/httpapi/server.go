@@ -332,7 +332,26 @@ func (s *Server) handleListIdentities(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.attachIdentityUsernames(items)
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) attachIdentityUsernames(items []model.Identity) {
+	box, err := s.requireBox()
+	if err != nil {
+		return
+	}
+	blobs, err := s.d.Store.IdentityBlobs()
+	if err != nil {
+		return
+	}
+	for i := range items {
+		blob := blobs[items[i].ID]
+		if blob == "" {
+			continue
+		}
+		items[i].Username = secretUsername(box, blob)
+	}
 }
 
 func (s *Server) handleCreateIdentity(w http.ResponseWriter, r *http.Request) {
@@ -614,6 +633,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.attachHostUsernames(res.Hosts)
 	writeJSON(w, 200, res)
 }
 
@@ -623,7 +643,41 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.attachHostUsernames(items)
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) attachHostUsernames(items []model.Host) {
+	box, err := s.requireBox()
+	if err != nil {
+		return
+	}
+	identBlobs, _ := s.d.Store.IdentityBlobs()
+	inlineBlobs, _ := s.d.Store.InlineIdentityBlobs()
+	for i := range items {
+		blob := ""
+		if items[i].HasInlineIdentity {
+			blob = inlineBlobs[items[i].ID]
+		} else if items[i].IdentityID != nil && identBlobs != nil {
+			blob = identBlobs[*items[i].IdentityID]
+		}
+		if blob == "" {
+			continue
+		}
+		items[i].SSHUsername = secretUsername(box, blob)
+	}
+}
+
+func secretUsername(box *cryptox.Box, blob string) string {
+	plain, err := box.Decrypt(blob)
+	if err != nil {
+		return ""
+	}
+	var sec model.IdentitySecret
+	if err := json.Unmarshal([]byte(plain), &sec); err != nil {
+		return ""
+	}
+	return sec.Username
 }
 
 func (s *Server) handleListTags(w http.ResponseWriter, r *http.Request) {

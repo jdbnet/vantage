@@ -41,6 +41,7 @@ type Host struct {
 	LastConnectedAt   *string  `json:"last_connected_at,omitempty"`
 	Tags              []string `json:"tags,omitempty"`
 	HasInlineIdentity bool     `json:"has_inline_identity,omitempty"`
+	SSHUsername       string   `json:"ssh_username,omitempty"`
 	CreatedAt         string   `json:"created_at,omitempty"`
 	UpdatedAt         string   `json:"updated_at,omitempty"`
 }
@@ -49,6 +50,7 @@ type Identity struct {
 	ID        string   `json:"id"`
 	Label     string   `json:"label"`
 	AuthType  AuthType `json:"auth_type"`
+	Username  string   `json:"ssh_username,omitempty"`
 	CreatedAt string   `json:"created_at,omitempty"`
 	UpdatedAt string   `json:"updated_at,omitempty"`
 }
