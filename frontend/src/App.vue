@@ -354,7 +354,9 @@ const quickErr = ref("");
 const quickBusy = ref(false);
 const quickForm = ref({
   protocol: "ssh" as HostProtocol,
-  auth_type: "password" as "password" | "publickey",
+  auth_type: "password" as "password" | "publickey" | "identity",
+  identity_id: "",
+  jump_host_id: "" as string,
   hostname: "",
   port: 22,
   ssh_username: "",
@@ -1142,6 +1144,8 @@ function openQuick() {
   quickForm.value = {
     protocol: "ssh",
     auth_type: "password",
+    identity_id: identities.value[0]?.id || "",
+    jump_host_id: "",
     hostname: "",
     port: 22,
     ssh_username: "",
@@ -1157,15 +1161,18 @@ async function submitQuick() {
   quickErr.value = "";
   quickBusy.value = true;
   try {
+    const useIdentity = f.auth_type === "identity";
     const useKey = f.protocol === "ssh" && f.auth_type === "publickey";
     const res = await api.quickConnect({
       protocol: f.protocol,
       hostname: f.hostname.trim(),
       port: Number(f.port) || defaultPort(f.protocol),
-      ssh_username: f.ssh_username.trim(),
-      password: useKey ? "" : f.password,
+      ssh_username: useIdentity ? "" : f.ssh_username.trim(),
+      password: useIdentity || useKey ? "" : f.password,
       private_key: useKey ? f.private_key : "",
       key_passphrase: useKey ? f.key_passphrase : "",
+      identity_id: useIdentity ? f.identity_id : "",
+      jump_host_id: f.protocol === "ssh" ? f.jump_host_id : "",
     });
     const id = crypto.randomUUID();
     tabs.value.push({
@@ -1192,11 +1199,15 @@ function toggleSidebar() {
 }
 
 function closeTab(id: string) {
+  const tab = tabs.value.find((t) => t.id === id);
   closePopoutWindow(id);
   tabs.value = tabs.value.filter((t) => t.id !== id);
   activePanes.value = activePanes.value.filter((p) => p !== id);
   if (activePanes.value.length === 0 && tabs.value.length) {
     activePanes.value = [tabs.value[tabs.value.length - 1].id];
+  }
+  if (tab?.ephemeral && tab.hostId.startsWith("q-")) {
+    void api.forgetQuick(tab.hostId);
   }
 }
 
@@ -2406,7 +2417,7 @@ async function deleteIdentityRow(id: string) {
         <select
           v-model="quickForm.protocol"
           class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm"
-          @change="quickForm.port = defaultPort(quickForm.protocol); if (quickForm.protocol !== 'ssh') quickForm.auth_type = 'password'"
+          @change="quickForm.port = defaultPort(quickForm.protocol); if (quickForm.protocol !== 'ssh' && quickForm.auth_type === 'publickey') quickForm.auth_type = 'password'"
         >
           <option value="ssh">SSH</option>
           <option value="vnc">VNC</option>
@@ -2416,16 +2427,26 @@ async function deleteIdentityRow(id: string) {
         <input v-model="quickForm.hostname" required class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
         <label class="mt-3 block text-xs uppercase text-slate-500">Port</label>
         <input v-model.number="quickForm.port" type="number" required class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
-        <label class="mt-3 block text-xs uppercase text-slate-500">{{ credUsernameLabel(quickForm.protocol) }}</label>
-        <input v-model="quickForm.ssh_username" :required="quickForm.protocol !== 'vnc'" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
-        <template v-if="quickForm.protocol === 'ssh'">
-          <label class="mt-3 block text-xs uppercase text-slate-500">Auth type</label>
-          <select v-model="quickForm.auth_type" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm">
-            <option value="password">Password</option>
-            <option value="publickey">Private key</option>
+        <template v-if="quickForm.auth_type !== 'identity'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">{{ credUsernameLabel(quickForm.protocol) }}</label>
+          <input v-model="quickForm.ssh_username" :required="quickForm.protocol !== 'vnc'" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        </template>
+        <label class="mt-3 block text-xs uppercase text-slate-500">Auth type</label>
+        <select v-model="quickForm.auth_type" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm">
+          <option value="identity">Saved identity</option>
+          <option value="password">Password</option>
+          <option v-if="quickForm.protocol === 'ssh'" value="publickey">Private key</option>
+        </select>
+        <template v-if="quickForm.auth_type === 'identity'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">Identity</label>
+          <select v-model="quickForm.identity_id" required class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm">
+            <option v-if="identities.length === 0" value="" disabled>No saved identities</option>
+            <option v-for="i in identities" :key="i.id" :value="i.id">
+              {{ i.label }}{{ i.ssh_username ? ` (${i.ssh_username})` : "" }} ({{ i.auth_type }})
+            </option>
           </select>
         </template>
-        <template v-if="quickForm.protocol !== 'ssh' || quickForm.auth_type === 'password'">
+        <template v-else-if="quickForm.protocol !== 'ssh' || quickForm.auth_type === 'password'">
           <label class="mt-3 block text-xs uppercase text-slate-500">Password</label>
           <input v-model="quickForm.password" type="password" :required="quickForm.protocol === 'rdp' || (quickForm.protocol === 'ssh' && quickForm.auth_type === 'password')" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
         </template>
@@ -2434,6 +2455,15 @@ async function deleteIdentityRow(id: string) {
           <textarea v-model="quickForm.private_key" required rows="4" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 font-mono text-xs" placeholder="-----BEGIN PRIVATE KEY-----" />
           <label class="mt-3 block text-xs uppercase text-slate-500">Key passphrase (optional)</label>
           <input v-model="quickForm.key_passphrase" type="password" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        </template>
+        <template v-if="quickForm.protocol === 'ssh'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">Jump host (optional)</label>
+          <select v-model="quickForm.jump_host_id" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm">
+            <option value="">None (direct)</option>
+            <option v-for="h in allHosts.filter((x) => x.protocol === 'ssh')" :key="h.id" :value="h.id">
+              {{ h.label }} ({{ h.hostname }}:{{ h.port }})
+            </option>
+          </select>
         </template>
         <p v-if="quickErr" class="mt-3 text-sm text-red-400">{{ quickErr }}</p>
         <div class="mt-5 flex justify-end gap-2">

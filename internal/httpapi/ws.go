@@ -235,7 +235,13 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		auditHost = tgt.host()
-		sess, err = sshx.ConnectDirect(s.d.Store, hostID, tgt.Label, tgt.Hostname, tgt.Port, startCols, startRows, tgt.creds(), prompt)
+		creds, credErr := s.quickCreds(tgt, box)
+		if credErr != nil {
+			writeTerm([]byte(credErr.Error() + "\r\n"))
+			writeJSONLocked(map[string]any{"type": "error", "error": credErr.Error()})
+			return
+		}
+		sess, err = sshx.ConnectJumped(s.d.Store, box, tgt.JumpHostID, hostID, tgt.Label, tgt.Hostname, tgt.Port, startCols, startRows, creds, prompt)
 	} else {
 		sess, err = sshx.Connect(s.d.Store, box, hostID, startCols, startRows, prompt)
 		if err == nil {
@@ -358,13 +364,19 @@ func (s *Server) handleGuacWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		auditHost = tgt.host()
+		creds, err := s.quickCreds(tgt, box)
+		if err != nil {
+			sendErr(err.Error())
+			return
+		}
 		params = guacx.Params{
 			GuacdAddr:  st.GuacdAddr,
 			Protocol:   string(tgt.Protocol),
 			Hostname:   tgt.Hostname,
 			Port:       tgt.Port,
-			Username:   tgt.Username,
-			Password:   tgt.Password,
+			Username:   creds.User,
+			Password:   creds.Password,
+			Domain:     creds.Domain,
 			Width:      1920,
 			Height:     1080,
 			ColorDepth: 24,

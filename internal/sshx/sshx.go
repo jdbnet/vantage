@@ -118,6 +118,42 @@ func (r *Registry) CloseAll() {
 	}
 }
 
+func credsFromBlob(box *cryptox.Box, blob, pass string) (Creds, error) {
+	plain, err := box.Decrypt(blob)
+	if err != nil {
+		return Creds{}, err
+	}
+	var sec model.IdentitySecret
+	if err := json.Unmarshal([]byte(plain), &sec); err != nil {
+		return Creds{}, err
+	}
+	if pass != "" {
+		pp, err := box.Decrypt(pass)
+		if err == nil {
+			sec.Passphrase = pp
+		}
+	}
+	return Creds{
+		User:       sec.Username,
+		Password:   sec.Password,
+		PrivateKey: sec.PrivateKey,
+		Passphrase: sec.Passphrase,
+		Domain:     sec.Domain,
+	}, nil
+}
+
+func CredsFromIdentity(st *store.Store, box *cryptox.Box, identityID string) (Creds, error) {
+	ident, err := st.GetIdentity(identityID)
+	if err != nil {
+		return Creds{}, err
+	}
+	pass := ""
+	if ident.Passphrase != nil {
+		pass = *ident.Passphrase
+	}
+	return credsFromBlob(box, ident.Blob, pass)
+}
+
 func ResolveCreds(st *store.Store, box *cryptox.Box, hostID string) (store.HostRecord, Creds, error) {
 	rec, err := st.GetHostRecord(hostID)
 	if err != nil {
@@ -141,73 +177,30 @@ func ResolveCreds(st *store.Store, box *cryptox.Box, hostID string) (store.HostR
 	} else {
 		return rec, Creds{}, fmt.Errorf("host has no credentials")
 	}
-	plain, err := box.Decrypt(blob)
+	creds, err := credsFromBlob(box, blob, pass)
 	if err != nil {
 		return rec, Creds{}, err
 	}
-	var sec model.IdentitySecret
-	if err := json.Unmarshal([]byte(plain), &sec); err != nil {
-		return rec, Creds{}, err
-	}
-	if pass != "" {
-		pp, err := box.Decrypt(pass)
-		if err == nil {
-			sec.Passphrase = pp
-		}
-	}
-	return rec, Creds{
-		User:       sec.Username,
-		Password:   sec.Password,
-		PrivateKey: sec.PrivateKey,
-		Passphrase: sec.Passphrase,
-		Domain:     sec.Domain,
-	}, nil
+	return rec, creds, nil
 }
 
-func Connect(st *store.Store, box *cryptox.Box, hostID string, cols, rows int, prompt *Prompt) (*Session, error) {
-	chain, err := jumpChain(st, hostID)
+func dialClient(prev *ssh.Client, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
+	if prev == nil {
+		return ssh.Dial("tcp", addr, cfg)
+	}
+	nc, err := prev.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	var jumps []*ssh.Client
-	var client *ssh.Client
-	for i, hid := range chain {
-		rec, creds, err := ResolveCreds(st, box, hid)
-		if err != nil {
-			closeAll(client, jumps)
-			return nil, err
-		}
-		cfg, err := sshConfig(st, creds, prompt, rec.Host.Hostname, rec.Host.Port)
-		if err != nil {
-			closeAll(client, jumps)
-			return nil, err
-		}
-		addr := net.JoinHostPort(rec.Host.Hostname, fmt.Sprintf("%d", rec.Host.Port))
-		var c *ssh.Client
-		if i == 0 {
-			c, err = ssh.Dial("tcp", addr, cfg)
-		} else {
-			nc, e := client.Dial("tcp", addr)
-			if e != nil {
-				closeAll(client, jumps)
-				return nil, e
-			}
-			conn, chans, reqs, e := ssh.NewClientConn(nc, addr, cfg)
-			if e != nil {
-				_ = nc.Close()
-				closeAll(client, jumps)
-				return nil, e
-			}
-			c = ssh.NewClient(conn, chans, reqs)
-			jumps = append(jumps, client)
-		}
-		if err != nil {
-			closeAll(client, jumps)
-			return nil, err
-		}
-		client = c
+	conn, chans, reqs, err := ssh.NewClientConn(nc, addr, cfg)
+	if err != nil {
+		_ = nc.Close()
+		return nil, err
 	}
+	return ssh.NewClient(conn, chans, reqs), nil
+}
 
+func startShell(client *ssh.Client, jumps []*ssh.Client, hostID, label string, cols, rows int) (*Session, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		closeAll(client, jumps)
@@ -253,16 +246,9 @@ func Connect(st *store.Store, box *cryptox.Box, hostID string, cols, rows int, p
 		closeAll(client, jumps)
 		return nil, err
 	}
-
-	host, err := st.GetHost(hostID)
-	if err != nil {
-		_ = session.Close()
-		closeAll(client, jumps)
-		return nil, err
-	}
 	return &Session{
 		HostID:  hostID,
-		Label:   host.Label,
+		Label:   label,
 		Client:  client,
 		Stdin:   stdin,
 		Stdout:  stdout,
@@ -272,73 +258,86 @@ func Connect(st *store.Store, box *cryptox.Box, hostID string, cols, rows int, p
 	}, nil
 }
 
+func Connect(st *store.Store, box *cryptox.Box, hostID string, cols, rows int, prompt *Prompt) (*Session, error) {
+	chain, err := jumpChain(st, hostID)
+	if err != nil {
+		return nil, err
+	}
+	client, jumps, err := dialChain(st, box, chain, prompt)
+	if err != nil {
+		return nil, err
+	}
+	host, err := st.GetHost(hostID)
+	if err != nil {
+		closeAll(client, jumps)
+		return nil, err
+	}
+	return startShell(client, jumps, hostID, host.Label, cols, rows)
+}
+
+func dialChain(st *store.Store, box *cryptox.Box, chain []string, prompt *Prompt) (*ssh.Client, []*ssh.Client, error) {
+	var jumps []*ssh.Client
+	var client *ssh.Client
+	for _, hid := range chain {
+		rec, creds, err := ResolveCreds(st, box, hid)
+		if err != nil {
+			closeAll(client, jumps)
+			return nil, nil, err
+		}
+		cfg, err := sshConfig(st, creds, prompt, rec.Host.Hostname, rec.Host.Port)
+		if err != nil {
+			closeAll(client, jumps)
+			return nil, nil, err
+		}
+		addr := net.JoinHostPort(rec.Host.Hostname, fmt.Sprintf("%d", rec.Host.Port))
+		next, err := dialClient(client, addr, cfg)
+		if err != nil {
+			closeAll(client, jumps)
+			return nil, nil, err
+		}
+		if client != nil {
+			jumps = append(jumps, client)
+		}
+		client = next
+	}
+	return client, jumps, nil
+}
+
 func ConnectDirect(st *store.Store, hostID, label, hostname string, port, cols, rows int, creds Creds, prompt *Prompt) (*Session, error) {
+	return ConnectJumped(st, nil, "", hostID, label, hostname, port, cols, rows, creds, prompt)
+}
+
+func ConnectJumped(st *store.Store, box *cryptox.Box, jumpHostID, hostID, label, hostname string, port, cols, rows int, creds Creds, prompt *Prompt) (*Session, error) {
+	var client *ssh.Client
+	var jumps []*ssh.Client
+	if jumpHostID != "" {
+		chain, err := jumpChain(st, jumpHostID)
+		if err != nil {
+			return nil, err
+		}
+		client, jumps, err = dialChain(st, box, chain, prompt)
+		if err != nil {
+			return nil, err
+		}
+	}
 	cfg, err := sshConfig(st, creds, prompt, hostname, port)
 	if err != nil {
+		closeAll(client, jumps)
 		return nil, err
 	}
 	addr := net.JoinHostPort(hostname, fmt.Sprintf("%d", port))
-	client, err := ssh.Dial("tcp", addr, cfg)
+	next, err := dialClient(client, addr, cfg)
 	if err != nil {
+		closeAll(client, jumps)
 		return nil, err
 	}
-	session, err := client.NewSession()
-	if err != nil {
-		_ = client.Close()
-		return nil, err
-	}
-	if cols <= 0 {
-		cols = 120
-	}
-	if rows <= 0 {
-		rows = 40
-	}
-	modes := ssh.TerminalModes{
-		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 14400,
-		ssh.TTY_OP_OSPEED: 14400,
-	}
-	if err := session.RequestPty("xterm-256color", rows, cols, modes); err != nil {
-		_ = session.Close()
-		_ = client.Close()
-		return nil, err
-	}
-	stdin, err := session.StdinPipe()
-	if err != nil {
-		_ = session.Close()
-		_ = client.Close()
-		return nil, err
-	}
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		_ = session.Close()
-		_ = client.Close()
-		return nil, err
-	}
-	stderr, err := session.StderrPipe()
-	if err != nil {
-		_ = session.Close()
-		_ = client.Close()
-		return nil, err
-	}
-	go io.Copy(io.Discard, stderr)
-	if err := session.Shell(); err != nil {
-		_ = session.Close()
-		_ = client.Close()
-		return nil, err
+	if client != nil {
+		jumps = append(jumps, client)
 	}
 	if label == "" {
 		label = hostname
 	}
-	return &Session{
-		HostID:  hostID,
-		Label:   label,
-		Client:  client,
-		Stdin:   stdin,
-		Stdout:  stdout,
-		Sess:    session,
-		Started: time.Now(),
-	}, nil
+	return startShell(next, jumps, hostID, label, cols, rows)
 }
 
 func closeAll(client *ssh.Client, jumps []*ssh.Client) {

@@ -285,6 +285,16 @@ export const api = {
     return handle(res);
   },
 
+  async forgetQuick(id: string): Promise<void> {
+    const res = await apiFetch(`/api/quick-connect/${id}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (!res.ok && res.status !== 204) {
+      throw new Error(await res.text());
+    }
+  },
+
   async createHost(body: Record<string, unknown>): Promise<{ id: string }> {
     const res = await apiFetch("/api/hosts", {
       method: "POST",
