@@ -29,3 +29,12 @@ export async function desktopReadClipboard(): Promise<string> {
 export async function desktopWriteClipboard(text: string): Promise<void> {
   await callDesktop("WriteClipboard", text);
 }
+
+export async function desktopPopoutSupported(): Promise<boolean> {
+  if (!isDesktopShell()) return false;
+  try {
+    return (await callDesktop("PopoutSupported")) === true;
+  } catch {
+    return false;
+  }
+}

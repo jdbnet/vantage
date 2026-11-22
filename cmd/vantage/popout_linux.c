@@ -58,18 +58,9 @@ static WebKitWebView *on_create(WebKitWebView *parent, WebKitNavigationAction *n
 	g_signal_connect(view, "close", G_CALLBACK(on_close), window);
 	g_signal_connect(view, "notify::title", G_CALLBACK(on_title), window);
 
-	gtk_widget_show_all(window);
+	/* The class handler runs after ours and returns NULL, which makes window.open fail. */
+	g_signal_stop_emission_by_name(parent, "create");
 	return WEBKIT_WEB_VIEW(view);
-}
-
-static gboolean on_decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision, WebKitPolicyDecisionType type, gpointer user_data) {
-	(void)view;
-	(void)user_data;
-	if (type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
-		webkit_policy_decision_use(decision);
-		return TRUE;
-	}
-	return FALSE;
 }
 
 static void attach_view(WebKitWebView *view) {
@@ -82,7 +73,6 @@ static void attach_view(WebKitWebView *view) {
 	webkit_settings_set_javascript_can_open_windows_automatically(settings, TRUE);
 
 	g_signal_connect(view, "create", G_CALLBACK(on_create), NULL);
-	g_signal_connect(view, "decide-policy", G_CALLBACK(on_decide_policy), NULL);
 }
 
 static void walk_widget(GtkWidget *widget, gpointer data) {
@@ -106,7 +96,7 @@ static gboolean attach_tick(gpointer data) {
 		walk_widget(GTK_WIDGET(l->data), &found);
 	}
 	g_list_free(toplevels);
-	if (found || ++(*tries) > 100) {
+	if (found || ++(*tries) > 200) {
 		g_free(tries);
 		return G_SOURCE_REMOVE;
 	}
@@ -115,5 +105,5 @@ static gboolean attach_tick(gpointer data) {
 
 void vantage_enable_webkit_popouts(void) {
 	int *tries = g_new0(int, 1);
-	g_timeout_add(50, attach_tick, tries);
+	gdk_threads_add_timeout(50, attach_tick, tries);
 }

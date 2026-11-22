@@ -53,13 +53,13 @@ export function openPopout(opts: {
     copyStyles(document, doc);
     const css = doc.createElement("style");
     css.textContent =
-      "html,body{margin:0;height:100%;width:100%;background:#0d1117;overflow:hidden;color-scheme:dark}" +
+      "html,body{margin:0;height:100%;width:100%;background:#070708;overflow:hidden;color-scheme:dark}" +
       "#popout-root{height:100%;width:100%;display:flex;min-height:0;min-width:0}";
     doc.head.appendChild(css);
     doc.title = opts.title;
     doc.body.style.margin = "0";
     doc.body.style.height = "100%";
-    doc.body.style.background = "#0d1117";
+    doc.body.style.background = "#070708";
 
     mount = doc.createElement("div");
     mount.id = "popout-root";

@@ -63,7 +63,9 @@ func main() {
 		BackgroundColour: application.NewRGB(13, 17, 23),
 	})
 	window.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
-		enableWebkitPopouts()
+		application.InvokeSync(func() {
+			enableWebkitPopouts()
+		})
 	})
 
 	if err := app.Run(); err != nil {

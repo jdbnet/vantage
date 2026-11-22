@@ -275,6 +275,16 @@ export const api = {
     return d.items;
   },
 
+  async quickConnect(body: Record<string, unknown>): Promise<{ id: string; protocol: HostProtocol; label: string }> {
+    const res = await apiFetch("/api/quick-connect", {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify(body),
+    });
+    return handle(res);
+  },
+
   async createHost(body: Record<string, unknown>): Promise<{ id: string }> {
     const res = await apiFetch("/api/hosts", {
       method: "POST",

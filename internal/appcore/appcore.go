@@ -30,6 +30,7 @@ type Core struct {
 	Version    string
 	mu         sync.RWMutex
 	box        *cryptox.Box
+	handler    http.Handler
 	syncClient *syncx.Client
 	closed     sync.Once
 }
@@ -103,7 +104,12 @@ func (c *Core) SetBox(b *cryptox.Box) {
 }
 
 func (c *Core) Handler() http.Handler {
-	return httpapi.New(httpapi.Deps{
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.handler != nil {
+		return c.handler
+	}
+	c.handler = httpapi.New(httpapi.Deps{
 		Store:           c.Store,
 		Box:             c.Box,
 		SetBox:          c.SetBox,
@@ -121,6 +127,7 @@ func (c *Core) Handler() http.Handler {
 		SyncStatus:      c.SyncStatus,
 		KickSync:        c.KickSync,
 	})
+	return c.handler
 }
 
 func (c *Core) NeedsSetup() bool {

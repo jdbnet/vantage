@@ -44,7 +44,7 @@ async function submit() {
 
 <template>
   <div class="flex min-h-screen items-center justify-center bg-surface p-6">
-    <div class="w-full max-w-md rounded-xl border border-slate-800 bg-surface-raised p-8 shadow-xl">
+    <div class="w-full max-w-md rounded-lg border border-slate-800 bg-surface-raised p-8 shadow-xl">
       <h1 class="font-sans text-2xl font-semibold tracking-tight text-white">Vantage</h1>
       <p class="mt-1 text-sm text-slate-400">
         {{

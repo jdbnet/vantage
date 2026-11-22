@@ -5,23 +5,23 @@ export default {
     extend: {
       colors: {
         surface: {
-          DEFAULT: "#0d1117",
-          raised: "#161b22",
-          overlay: "#21262d",
+          DEFAULT: "#09090b",
+          raised: "#18181b",
+          overlay: "#09090b",
         },
         accent: {
           DEFAULT: "rgb(var(--accent) / <alpha-value>)",
           muted: "rgb(var(--accent-muted) / <alpha-value>)",
         },
         slate: {
-          200: "#e6edf3",
-          300: "#c9d1d9",
-          400: "#8b949e",
-          500: "#6e7681",
-          600: "#484f58",
-          700: "#30363d",
-          800: "#21262d",
-          900: "#161b22",
+          200: "#e4e4e7",
+          300: "#d4d4d8",
+          400: "#a1a1aa",
+          500: "#71717a",
+          600: "#52525b",
+          700: "#3f3f46",
+          800: "#27272a",
+          900: "#18181b",
         },
       },
       fontFamily: {

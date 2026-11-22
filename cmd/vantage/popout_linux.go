@@ -11,3 +11,7 @@ import "C"
 func enableWebkitPopouts() {
 	C.vantage_enable_webkit_popouts()
 }
+
+func (d *Desktop) PopoutSupported() bool {
+	return false
+}

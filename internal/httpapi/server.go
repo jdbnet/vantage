@@ -42,9 +42,10 @@ type Deps struct {
 }
 
 type Server struct {
-	d    Deps
-	mux  *http.ServeMux
-	upgr websocket.Upgrader
+	d     Deps
+	mux   *http.ServeMux
+	upgr  websocket.Upgrader
+	quick quickBook
 }
 
 func New(d Deps) http.Handler {
@@ -113,6 +114,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/sync/resync", s.auth("", s.handleSyncResync))
 	mux.HandleFunc("GET /api/inventory/head", s.auth("read:hosts", s.handleInventoryHead))
 	mux.HandleFunc("/ws/sync", s.handleSyncWS)
+	mux.HandleFunc("POST /api/quick-connect", s.auth("terminal:connect", s.handleQuickConnect))
 	mux.HandleFunc("/ws/terminal", s.handleTerminalWS)
 	mux.HandleFunc("/ws/guac", s.handleGuacWS)
 

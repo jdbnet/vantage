@@ -9,6 +9,113 @@
 html.dark,
 html {
   color-scheme: dark;
+  background-color: #09090b;
+  background-image:
+    radial-gradient(ellipse 90% 55% at 50% -20%, rgba(255, 255, 255, 0.14), transparent 58%),
+    radial-gradient(ellipse 50% 40% at 100% 0%, rgba(255, 255, 255, 0.05), transparent 50%),
+    linear-gradient(180deg, #1a1a1e 0%, #0c0c0e 42%, #09090b 100%);
+  background-attachment: fixed;
+}
+
+button:not(:disabled) {
+  @apply hover:cursor-pointer;
+}
+
+.bg-surface {
+  background-color: transparent;
+}
+
+.bg-surface-raised,
+.bg-surface-overlay {
+  backdrop-filter: none;
+}
+
+.bg-surface-raised {
+  background-color: #18181b;
+}
+
+.bg-surface-overlay {
+  background-color: #09090b;
+}
+
+header {
+  background-color: rgba(24, 24, 27, 0.92);
+}
+
+.border-slate-800,
+.border-slate-700 {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+input,
+select,
+textarea {
+  border-radius: 0.375rem;
+  background-color: #09090b;
+}
+
+button.rounded-lg,
+button.rounded-xl {
+  border-radius: 0.375rem;
+  font-weight: 500;
+}
+
+.fixed.inset-0 > .rounded-xl,
+.fixed.inset-0 > .max-h-\[90vh\],
+.vantage-modal > * {
+  border-radius: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background-color: #161618;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.62);
+  backdrop-filter: none;
+}
+
+.vantage-modal {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.vantage-modal h2 {
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+
+.vantage-modal label {
+  color: #a1a1aa;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+.vantage-modal input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),
+.vantage-modal select,
+.vantage-modal textarea {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background-color: rgba(0, 0, 0, 0.35);
+  border-radius: 0.375rem;
+  color: #fafafa;
+}
+
+.vantage-modal input:not([type="checkbox"]):not([type="radio"]):focus,
+.vantage-modal select:focus,
+.vantage-modal textarea:focus {
+  outline: none;
+  border-color: rgb(var(--accent));
+  box-shadow: 0 0 0 1px rgb(var(--accent));
+}
+
+.vantage-modal button[type="submit"] {
+  border-radius: 0.375rem;
+  background-color: rgb(var(--accent));
+  color: #04140f;
+  font-weight: 500;
+}
+
+.vantage-modal button[type="submit"]:hover {
+  background-color: rgb(var(--accent-muted));
+}
+
+.vantage-modal button[type="button"] {
+  border-radius: 0.375rem;
 }
 
 .xterm {

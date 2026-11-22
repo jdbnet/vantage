@@ -227,7 +227,22 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	dims.mu.Lock()
 	startCols, startRows := dims.cols, dims.rows
 	dims.mu.Unlock()
-	sess, err := sshx.Connect(s.d.Store, box, hostID, startCols, startRows, prompt)
+	var sess *sshx.Session
+	var auditHost model.Host
+	if tgt, ok := s.quick.get(hostID); ok {
+		if tgt.Protocol != model.ProtocolSSH && tgt.Protocol != "" {
+			writeTerm([]byte("host is not ssh\r\n"))
+			return
+		}
+		auditHost = tgt.host()
+		sess, err = sshx.ConnectDirect(s.d.Store, hostID, tgt.Label, tgt.Hostname, tgt.Port, startCols, startRows, tgt.creds(), prompt)
+	} else {
+		sess, err = sshx.Connect(s.d.Store, box, hostID, startCols, startRows, prompt)
+		if err == nil {
+			auditHost, _ = s.d.Store.GetHost(hostID)
+			_ = s.d.Store.TouchHostConnected(hostID)
+		}
+	}
 	if err != nil {
 		writeTerm([]byte(err.Error() + "\r\n"))
 		writeJSONLocked(map[string]any{"type": "error", "error": err.Error()})
@@ -239,13 +254,11 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	dims.mu.Unlock()
 	close(authDone)
 	sess.ID = idgen.New()
-	host, _ := s.d.Store.GetHost(hostID)
 	if st, _ := s.d.Store.LoadSettings(); st.AuditLogEnabled {
-		if aid, err := s.d.Store.InsertAudit(host); err == nil {
+		if aid, err := s.d.Store.InsertAudit(auditHost); err == nil {
 			sess.AuditID = aid
 		}
 	}
-	_ = s.d.Store.TouchHostConnected(hostID)
 	s.d.Conns.Put(sess)
 	defer func() {
 		s.d.Conns.Pop(sess.ID)
@@ -337,41 +350,66 @@ func (s *Server) handleGuacWS(w http.ResponseWriter, r *http.Request) {
 		sendErr("guacd address is not configured")
 		return
 	}
-	rec, creds, err := sshx.ResolveCreds(s.d.Store, box, hostID)
-	if err != nil {
-		sendErr(err.Error())
-		return
+	var params guacx.Params
+	var auditHost model.Host
+	if tgt, ok := s.quick.get(hostID); ok {
+		if tgt.Protocol != model.ProtocolVNC && tgt.Protocol != model.ProtocolRDP {
+			sendErr("host is not vnc/rdp")
+			return
+		}
+		auditHost = tgt.host()
+		params = guacx.Params{
+			GuacdAddr:  st.GuacdAddr,
+			Protocol:   string(tgt.Protocol),
+			Hostname:   tgt.Hostname,
+			Port:       tgt.Port,
+			Username:   tgt.Username,
+			Password:   tgt.Password,
+			Width:      1920,
+			Height:     1080,
+			ColorDepth: 24,
+		}
+	} else {
+		rec, creds, err := sshx.ResolveCreds(s.d.Store, box, hostID)
+		if err != nil {
+			sendErr(err.Error())
+			return
+		}
+		proto := string(rec.Host.Protocol)
+		if proto != "vnc" && proto != "rdp" {
+			sendErr("host is not vnc/rdp")
+			return
+		}
+		auditHost = rec.Host
+		params = guacx.Params{
+			GuacdAddr:  st.GuacdAddr,
+			Protocol:   proto,
+			Hostname:   rec.Host.Hostname,
+			Port:       rec.Host.Port,
+			Username:   creds.User,
+			Password:   creds.Password,
+			Domain:     creds.Domain,
+			Width:      1920,
+			Height:     1080,
+			ColorDepth: 24,
+		}
 	}
-	proto := string(rec.Host.Protocol)
-	if proto != "vnc" && proto != "rdp" {
-		sendErr("host is not vnc/rdp")
-		return
-	}
+	proto := params.Protocol
 	t0 := time.Now()
-	log.Printf("%s ws start host=%s %s:%d from %s", proto, hostID, rec.Host.Hostname, rec.Host.Port, reqIP(r))
+	log.Printf("%s ws start host=%s %s:%d from %s", proto, hostID, params.Hostname, params.Port, reqIP(r))
 	defer func() {
 		log.Printf("%s ws end host=%s from %s after %s", proto, hostID, reqIP(r), time.Since(t0).Round(time.Millisecond))
 	}()
-	width := 1920
-	height := 1080
+	width := params.Width
+	height := params.Height
 	if n, _ := strconvAtoi(r.URL.Query().Get("width")); n >= 320 && n <= 7680 {
 		width = n
 	}
 	if n, _ := strconvAtoi(r.URL.Query().Get("height")); n >= 240 && n <= 4320 {
 		height = n
 	}
-	params := guacx.Params{
-		GuacdAddr:  st.GuacdAddr,
-		Protocol:   proto,
-		Hostname:   rec.Host.Hostname,
-		Port:       rec.Host.Port,
-		Username:   creds.User,
-		Password:   creds.Password,
-		Domain:     creds.Domain,
-		Width:      width,
-		Height:     height,
-		ColorDepth: 24,
-	}
+	params.Width = width
+	params.Height = height
 	if proto == "rdp" {
 		local := s.sharedFilesDir(st)
 		if err := ensureSharedDir(local); err != nil {
@@ -395,10 +433,11 @@ func (s *Server) handleGuacWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tunnel.Close()
-	_ = s.d.Store.TouchHostConnected(hostID)
+	if !strings.HasPrefix(hostID, "q-") {
+		_ = s.d.Store.TouchHostConnected(hostID)
+	}
 	if st.AuditLogEnabled {
-		h, _ := s.d.Store.GetHost(hostID)
-		if aid, err := s.d.Store.InsertAudit(h); err == nil {
+		if aid, err := s.d.Store.InsertAudit(auditHost); err == nil {
 			defer func() { _ = s.d.Store.FinishAudit(aid, time.Now()) }()
 		}
 	}

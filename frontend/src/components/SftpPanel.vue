@@ -24,6 +24,15 @@ function isDir(m: number): boolean {
   return (m & 0o170000) === 0o040000;
 }
 
+function sortEntries(list: SftpEntry[]): SftpEntry[] {
+  return [...list].sort((a, b) => {
+    const ad = isDir(a.st_mode);
+    const bd = isDir(b.st_mode);
+    if (ad !== bd) return ad ? -1 : 1;
+    return a.filename.localeCompare(b.filename, undefined, { sensitivity: "base", numeric: true });
+  });
+}
+
 function joinRemote(base: string, name: string): string {
   if (base === "/") return `/${name}`.replace("//", "/");
   return `${base.replace(/\/$/, "")}/${name}`;
@@ -38,7 +47,7 @@ async function load() {
         ? await api.sharedList(props.hostId || "", path.value)
         : await api.sftpList(props.connId || "", path.value);
     path.value = r.path;
-    entries.value = r.entries;
+    entries.value = sortEntries(r.entries || []);
   } catch (e) {
     err.value = e instanceof Error ? e.message : "List failed";
   } finally {

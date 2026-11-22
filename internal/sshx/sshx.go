@@ -272,6 +272,75 @@ func Connect(st *store.Store, box *cryptox.Box, hostID string, cols, rows int, p
 	}, nil
 }
 
+func ConnectDirect(st *store.Store, hostID, label, hostname string, port, cols, rows int, creds Creds, prompt *Prompt) (*Session, error) {
+	cfg, err := sshConfig(st, creds, prompt, hostname, port)
+	if err != nil {
+		return nil, err
+	}
+	addr := net.JoinHostPort(hostname, fmt.Sprintf("%d", port))
+	client, err := ssh.Dial("tcp", addr, cfg)
+	if err != nil {
+		return nil, err
+	}
+	session, err := client.NewSession()
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	if cols <= 0 {
+		cols = 120
+	}
+	if rows <= 0 {
+		rows = 40
+	}
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}
+	if err := session.RequestPty("xterm-256color", rows, cols, modes); err != nil {
+		_ = session.Close()
+		_ = client.Close()
+		return nil, err
+	}
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		_ = session.Close()
+		_ = client.Close()
+		return nil, err
+	}
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		_ = session.Close()
+		_ = client.Close()
+		return nil, err
+	}
+	stderr, err := session.StderrPipe()
+	if err != nil {
+		_ = session.Close()
+		_ = client.Close()
+		return nil, err
+	}
+	go io.Copy(io.Discard, stderr)
+	if err := session.Shell(); err != nil {
+		_ = session.Close()
+		_ = client.Close()
+		return nil, err
+	}
+	if label == "" {
+		label = hostname
+	}
+	return &Session{
+		HostID:  hostID,
+		Label:   label,
+		Client:  client,
+		Stdin:   stdin,
+		Stdout:  stdout,
+		Sess:    session,
+		Started: time.Now(),
+	}, nil
+}
+
 func closeAll(client *ssh.Client, jumps []*ssh.Client) {
 	if client != nil {
 		_ = client.Close()

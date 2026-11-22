@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch, nextTick, computed } from "vue";
-import { Folder, Pencil, Trash2, Radio, ChevronDown, Settings, SquareArrowOutUpRight, Maximize2 } from "@lucide/vue";
+import { Folder, FolderPlus, KeyRound, Pencil, Plug, Plus, Trash2, Radio, ChevronDown, Settings, SquareArrowOutUpRight, Maximize2 } from "@lucide/vue";
 import {
   api,
   type HostRow,
@@ -21,12 +21,14 @@ import SnippetForm from "@/components/SnippetForm.vue";
 import { applyAccent, DEFAULT_ACCENT, normalizeAccent } from "@/theme";
 import { openPopout, type PopoutHandle } from "@/popout";
 import { saveBlobAsFile } from "@/download";
+import { desktopPopoutSupported } from "@/desktopBridge";
 
 interface TabItem {
   id: string;
   hostId: string;
   protocol: HostProtocol;
   label: string;
+  ephemeral?: boolean;
 }
 
 const loggedIn = ref(false);
@@ -44,12 +46,13 @@ const searchActive = ref(false);
 const currentFolderId = ref<string | null>(null);
 const searchQuery = ref("");
 const searchInput = ref<HTMLInputElement | null>(null);
-const tabs = ref<{ id: string; hostId: string; protocol: HostProtocol; label: string }[]>([]);
+const tabs = ref<TabItem[]>([]);
 const activePanes = ref<string[]>([]);
 const draggedTabId = ref<string | null>(null);
 const popouts = ref<Record<string, PopoutHandle>>({});
 const tabMenu = ref<{ id: string; x: number; y: number } | null>(null);
 const popoutErr = ref("");
+const popoutSupported = ref(false);
 const tabFullscreen = ref<Record<string, boolean>>({});
 
 const sessionFullscreen = computed(() =>
@@ -116,6 +119,9 @@ onMounted(() => {
   document.addEventListener("click", closeSnippetsMenu);
   document.addEventListener("keydown", onAppKeydown);
   document.addEventListener("click", closeTabMenu);
+  void desktopPopoutSupported().then((ok) => {
+    popoutSupported.value = ok;
+  });
 });
 
 onUnmounted(() => {
@@ -227,7 +233,7 @@ function closeTabMenu() {
 }
 
 function onTabContext(e: MouseEvent, id: string) {
-  if (!isDesktop()) return;
+  if (!isDesktop() || !popoutSupported.value) return;
   e.preventDefault();
   tabMenuIgnoreClick = true;
   tabMenu.value = { id, x: e.clientX, y: e.clientY };
@@ -271,7 +277,7 @@ function dockTab(id: string, closeWindow = true) {
 function popOutTab(id: string) {
   closeTabMenu();
   popoutErr.value = "";
-  if (!isDesktop() || popouts.value[id]) return;
+  if (!isDesktop() || !popoutSupported.value || popouts.value[id]) return;
   const tab = tabs.value.find((t) => t.id === id);
   if (!tab) return;
   const handle = openPopout({
@@ -343,6 +349,19 @@ const showIdentityForm = ref(false);
 const showIdentities = ref(false);
 const showEditIdentity = ref(false);
 const showHostForm = ref(false);
+const showQuick = ref(false);
+const quickErr = ref("");
+const quickBusy = ref(false);
+const quickForm = ref({
+  protocol: "ssh" as HostProtocol,
+  auth_type: "password" as "password" | "publickey",
+  hostname: "",
+  port: 22,
+  ssh_username: "",
+  password: "",
+  private_key: "",
+  key_passphrase: "",
+});
 const showFolderForm = ref(false);
 const showEditHost = ref(false);
 const showAuditLog = ref(false);
@@ -399,6 +418,7 @@ function filesPanelLabel(): string | null {
   const t = tabs.value.find((tab) => activePanes.value.includes(tab.id));
   if (!t) return null;
   if (t.protocol === "ssh") return "SFTP";
+  if (t.ephemeral) return null;
   if (t.protocol === "rdp") return "Shared files";
   return null;
 }
@@ -1117,6 +1137,56 @@ function openTab(h: HostRow) {
   }
 }
 
+function openQuick() {
+  quickErr.value = "";
+  quickForm.value = {
+    protocol: "ssh",
+    auth_type: "password",
+    hostname: "",
+    port: 22,
+    ssh_username: "",
+    password: "",
+    private_key: "",
+    key_passphrase: "",
+  };
+  showQuick.value = true;
+}
+
+async function submitQuick() {
+  const f = quickForm.value;
+  quickErr.value = "";
+  quickBusy.value = true;
+  try {
+    const useKey = f.protocol === "ssh" && f.auth_type === "publickey";
+    const res = await api.quickConnect({
+      protocol: f.protocol,
+      hostname: f.hostname.trim(),
+      port: Number(f.port) || defaultPort(f.protocol),
+      ssh_username: f.ssh_username.trim(),
+      password: useKey ? "" : f.password,
+      private_key: useKey ? f.private_key : "",
+      key_passphrase: useKey ? f.key_passphrase : "",
+    });
+    const id = crypto.randomUUID();
+    tabs.value.push({
+      id,
+      hostId: res.id,
+      protocol: res.protocol,
+      label: res.label,
+      ephemeral: true,
+    });
+    activePanes.value = [id];
+    showQuick.value = false;
+    if (window.matchMedia("(max-width: 767px)").matches) {
+      sidebarOpen.value = false;
+    }
+  } catch (e) {
+    quickErr.value = e instanceof Error ? e.message : "Could not connect";
+  } finally {
+    quickBusy.value = false;
+  }
+}
+
 function toggleSidebar() {
   sidebarOpen.value = !sidebarOpen.value;
 }
@@ -1403,12 +1473,12 @@ async function deleteIdentityRow(id: string) {
   <div v-else class="flex h-screen min-h-0 flex-col bg-surface font-sans">
     <header
       v-show="!sessionFullscreen"
-      class="flex shrink-0 items-center justify-between border-b border-slate-800 bg-surface-raised px-3 py-2 md:px-4"
+      class="flex shrink-0 items-center justify-between border-b border-slate-800 bg-surface-raised px-3 py-1.5 md:px-4"
     >
       <div class="flex min-w-0 items-center gap-2">
         <button
           type="button"
-          class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-300 hover:bg-slate-800 hover:text-white"
           aria-controls="hosts-sidebar"
           :aria-expanded="sidebarOpen"
           aria-label="Toggle hosts menu"
@@ -1431,7 +1501,7 @@ async function deleteIdentityRow(id: string) {
           </svg>
         </button>
         <div class="flex items-center gap-2 truncate">
-<span class="truncate text-sm font-semibold text-white">Vantage</span>
+<span class="truncate text-sm font-medium tracking-tight text-white">Vantage</span>
           <span class="truncate text-xs text-slate-400">{{ appVersion }}</span>
         </div>
       </div>
@@ -1439,7 +1509,7 @@ async function deleteIdentityRow(id: string) {
         <button
           v-if="activePanes.length > 1"
           type="button"
-          class="hidden rounded-lg px-3 py-1.5 text-xs md:inline-flex border transition-colors"
+          class="hidden h-8 items-center rounded-md border px-3 text-xs md:inline-flex"
           :class="broadcastMode ? 'border-accent bg-accent/10 text-accent' : 'border-slate-800 text-slate-400 hover:border-slate-700 hover:text-white'"
           @click="broadcastMode = !broadcastMode"
           title="Broadcast input to all visible terminals"
@@ -1453,7 +1523,7 @@ async function deleteIdentityRow(id: string) {
           <button
             ref="snippetsButtonRef"
             type="button"
-            class="rounded-lg px-3 py-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-white inline-flex items-center gap-1"
+            class="inline-flex h-8 items-center gap-1 rounded-md px-3 text-xs text-slate-300 hover:bg-slate-800 hover:text-white"
             @click="showSnippetsMenu = !showSnippetsMenu"
           >
             Snippets
@@ -1462,7 +1532,7 @@ async function deleteIdentityRow(id: string) {
           <div
             v-if="showSnippetsMenu"
             ref="snippetsMenuRef"
-            class="absolute right-0 top-full mt-2 w-64 rounded-xl border border-slate-700 bg-surface shadow-xl z-50 overflow-hidden"
+            class="absolute right-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-md border border-slate-700 bg-surface-raised shadow-xl"
           >
             <div class="max-h-64 overflow-y-auto p-1">
               <div v-if="snippets.length === 0" class="p-3 text-center text-xs text-slate-500">
@@ -1505,7 +1575,7 @@ async function deleteIdentityRow(id: string) {
         <button
           v-if="filesPanelLabel()"
           type="button"
-          class="hidden rounded-lg px-3 py-1.5 text-xs md:inline-flex"
+          class="inline-flex h-8 items-center rounded-md px-3 text-xs"
           :class="showSftpPanel ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'"
           @click="toggleSftp"
         >
@@ -1513,7 +1583,7 @@ async function deleteIdentityRow(id: string) {
         </button>
         <button
           type="button"
-          class="hidden rounded-lg px-3 py-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-white md:inline-flex"
+          class="hidden h-8 items-center rounded-md px-3 text-xs text-slate-300 hover:bg-slate-800 hover:text-white md:inline-flex"
           @click="openSettings"
         >
           <span class="inline-flex items-center gap-1"><Settings class="h-3.5 w-3.5" /> Settings</span>
@@ -1521,7 +1591,7 @@ async function deleteIdentityRow(id: string) {
         <button
           v-if="appMode !== 'desktop' && appSettings?.mode !== 'desktop'"
           type="button"
-          class="hidden rounded-lg px-3 py-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-white md:inline-flex"
+          class="hidden h-8 items-center rounded-md px-3 text-xs text-slate-300 hover:bg-slate-800 hover:text-white md:inline-flex"
           @click="openApiKeys"
         >
           API keys
@@ -1529,14 +1599,14 @@ async function deleteIdentityRow(id: string) {
         <button
           v-if="auditLogEnabled"
           type="button"
-          class="hidden rounded-lg px-3 py-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-white md:inline-flex"
+          class="hidden h-8 items-center rounded-md px-3 text-xs text-slate-300 hover:bg-slate-800 hover:text-white md:inline-flex"
           @click="openAuditLog"
         >
           Connection audit
         </button>
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-white"
+          class="inline-flex h-8 items-center rounded-md px-3 text-xs text-slate-300 hover:bg-slate-800 hover:text-white"
           @click="logout"
         >
           Sign out
@@ -1553,23 +1623,21 @@ async function deleteIdentityRow(id: string) {
       <aside
         v-show="!sessionFullscreen"
         id="hosts-sidebar"
-        class="flex w-72 shrink-0 flex-col border-r border-slate-800 bg-surface-raised transition-all duration-200 ease-out max-md:fixed max-md:bottom-0 max-md:left-0 max-md:top-14 max-md:z-40 max-md:max-h-[calc(100dvh-3.5rem)] max-md:shadow-2xl md:relative"
+        class="flex w-72 shrink-0 flex-col border-r border-white/10 bg-zinc-950/40 transition-all duration-200 ease-out max-md:fixed max-md:bottom-0 max-md:left-0 max-md:top-14 max-md:z-40 max-md:max-h-[calc(100dvh-3.5rem)] max-md:bg-zinc-950 max-md:shadow-2xl md:relative"
         :class="
           sidebarOpen
             ? 'max-md:translate-x-0 md:translate-x-0 md:w-72 md:opacity-100'
             : 'max-md:-translate-x-full md:-translate-x-full md:w-0 md:opacity-0 md:border-r-0 md:overflow-hidden'
         "
       >
-        <div class="border-b border-slate-800 p-3">
-          <div class="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Hosts
-          </div>
+        <div class="border-b border-white/10 p-3">
+          <div class="text-sm font-medium tracking-tight text-white">Hosts</div>
           <input
             ref="searchInput"
             v-model="searchQuery"
             type="search"
-            placeholder="Search…"
-            class="mt-2 w-full rounded-lg border border-slate-700 bg-surface-overlay px-2 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+            placeholder="Search hosts"
+            class="mt-3 h-8 w-full rounded-md border border-white/10 bg-black/30 px-2.5 text-xs text-white placeholder:text-slate-500 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
             @input="onSearchInput"
           >
           <p
@@ -1604,26 +1672,37 @@ async function deleteIdentityRow(id: string) {
               </button>
             </template>
           </nav>
-          <div class="mt-2 flex flex-wrap gap-2">
+          <div class="mt-3 flex flex-wrap justify-center gap-1.5">
             <button
               type="button"
-              class="rounded bg-accent/20 px-2 py-1 text-xs text-accent hover:bg-accent/30"
+              class="inline-flex h-7 items-center gap-1 rounded-md bg-accent px-2.5 text-xs font-medium text-slate-950 hover:bg-accent-muted"
               @click="showHostForm = true"
             >
+              <Plus class="h-3.5 w-3.5" aria-hidden="true" />
               Add host
             </button>
             <button
               type="button"
-              class="rounded bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700"
+              class="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2.5 text-xs font-medium text-zinc-200 hover:bg-white/10"
               @click="showFolderForm = true"
             >
+              <FolderPlus class="h-3.5 w-3.5" aria-hidden="true" />
               New folder
             </button>
             <button
               type="button"
-              class="rounded bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700"
+              class="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2.5 text-xs font-medium text-zinc-200 hover:bg-white/10"
+              @click="openQuick"
+            >
+              <Plug class="h-3.5 w-3.5" aria-hidden="true" />
+              Quick connect
+            </button>
+            <button
+              type="button"
+              class="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2.5 text-xs font-medium text-zinc-200 hover:bg-white/10"
               @click="openIdentities"
             >
+              <KeyRound class="h-3.5 w-3.5" aria-hidden="true" />
               Identities
             </button>
           </div>
@@ -1634,15 +1713,15 @@ async function deleteIdentityRow(id: string) {
             <li
               v-for="f in browseFolders"
               :key="'f' + f.id"
-              class="flex items-center justify-between gap-1 rounded-lg border border-slate-800 bg-surface-overlay px-2 py-1.5"
+              class="group flex items-center justify-between gap-1 rounded-md px-2 py-1.5 hover:bg-white/5"
             >
               <button
                 type="button"
-                class="min-w-0 flex-1 truncate text-left text-sm text-accent hover:underline"
+                class="min-w-0 flex-1 truncate text-left text-sm text-zinc-200 hover:text-white"
                 @click="goToFolder(f.id)"
               >
                 <span class="inline-flex items-center gap-1.5">
-                  <Folder class="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <Folder class="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
                   <span>{{ f.label }}</span>
                 </span>
               </button>
@@ -1666,53 +1745,73 @@ async function deleteIdentityRow(id: string) {
               </div>
             </li>
           </ul>
-          <div v-if="browseHosts.length" class="mb-2 flex items-center justify-between">
-            <label class="text-xs text-slate-500 uppercase">Sort by:</label>
+          <div v-if="browseHosts.length" class="mb-2 flex items-center justify-between px-2">
+            <label class="text-[11px] text-slate-500">Sort</label>
             <select
               v-model="hostSortOrder"
-              class="rounded border border-slate-700 bg-surface-overlay px-2 py-1 text-xs"
+              class="h-7 rounded-md border border-white/10 bg-black/30 px-2 text-xs text-zinc-200"
             >
               <option value="name">Name</option>
               <option value="last_connected">Last connected</option>
             </select>
           </div>
-          <ul class="space-y-1">
+          <ul class="space-y-2">
             <li
               v-for="h in getSortedBrowseHosts()"
               :key="'h' + h.id"
-              class="rounded-lg border border-slate-800 bg-surface-overlay p-2"
+              class="rounded-lg border border-white/10 bg-black/35 p-2.5"
             >
-              <button
-                type="button"
-                class="flex w-full items-center gap-2 text-left text-sm font-medium text-white hover:text-accent"
-                @click="openTab(h)"
-              >
-                <span
-                  class="inline-block h-2 w-2 shrink-0 rounded-full"
-                  :class="hostUpClass(h.id)"
-                  :title="hostUpTitle(h.id)"
-                  :aria-label="hostUpTitle(h.id)"
-                />
-                <span class="min-w-0 truncate">{{ h.label }}</span>
-              </button>
-              <div class="mt-0.5 truncate font-mono text-[10px] text-slate-500">
-                {{ h.hostname }}:{{ h.port }} · {{ (h.protocol || "ssh").toUpperCase() }} · {{ h.identity_label }}<span v-if="h.ssh_username"> · {{ h.ssh_username }}</span>
+              <div class="flex items-start gap-2">
+                <button
+                  type="button"
+                  class="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium text-white hover:text-accent"
+                  @click="openTab(h)"
+                >
+                  <span
+                    class="inline-block h-2 w-2 shrink-0 rounded-full"
+                    :class="hostUpClass(h.id)"
+                    :title="hostUpTitle(h.id)"
+                    :aria-label="hostUpTitle(h.id)"
+                  />
+                  <span class="min-w-0 truncate">{{ h.label }}</span>
+                </button>
+                <div class="flex shrink-0 gap-1">
+                  <button
+                    type="button"
+                    class="rounded p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+                    title="Edit host"
+                    @click="openEditHost(h)"
+                  >
+                    <Pencil class="h-3 w-3" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded p-1 text-slate-400 hover:bg-white/10 hover:text-red-400"
+                    title="Delete host"
+                    @click="deleteHostRow(h.id)"
+                  >
+                    <Trash2 class="h-3 w-3" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+              <div class="mt-1 truncate pl-4 font-mono text-[10px] text-slate-400">
+                {{ h.hostname }}:{{ h.port }} · {{ (h.protocol || "ssh").toUpperCase() }} · <span class="text-accent/80">{{ h.identity_label }}</span><span v-if="h.ssh_username"> · {{ h.ssh_username }}</span>
               </div>
               <p
                 v-if="h.jump_host_id"
-                class="mt-0.5 truncate text-[10px] text-slate-500"
+                class="mt-0.5 truncate pl-4 text-[10px] text-slate-500"
               >
                 via {{ h.jump_host_label || `#${h.jump_host_id}` }}
               </p>
               <div
                 v-if="h.tags?.length"
-                class="mt-1 flex flex-wrap gap-1"
+                class="mt-1.5 flex flex-wrap gap-1 pl-4"
               >
                 <button
                   v-for="tag in h.tags"
                   :key="tag"
                   type="button"
-                  class="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400 hover:bg-slate-700 hover:text-accent"
+                  class="rounded-md border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent hover:bg-accent/20"
                   :title="`Search tag:${tag}`"
                   @click.stop="searchByTag(tag)"
                 >
@@ -1721,28 +1820,10 @@ async function deleteIdentityRow(id: string) {
               </div>
               <p
                 v-if="searchActive"
-                class="mt-0.5 truncate text-[10px] text-slate-600"
+                class="mt-0.5 truncate pl-4 text-[10px] text-slate-500"
               >
                 {{ folderOptionLabel(h.folder_id) }}
               </p>
-              <div class="mt-1 flex gap-1">
-                <button
-                  type="button"
-                  class="text-slate-400/70 hover:text-slate-300"
-                  title="Edit host"
-                  @click="openEditHost(h)"
-                >
-                  <Pencil class="h-3 w-3" aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  class="text-red-400/70 hover:text-red-400"
-                  title="Delete host"
-                  @click="deleteHostRow(h.id)"
-                >
-                  <Trash2 class="h-3 w-3" aria-hidden="true" />
-                </button>
-              </div>
             </li>
           </ul>
           <p
@@ -1817,7 +1898,7 @@ async function deleteIdentityRow(id: string) {
             @click.stop
           >
             <button
-              v-if="!popouts[tabMenu.id]"
+              v-if="popoutSupported && !popouts[tabMenu.id]"
               type="button"
               class="block w-full px-3 py-1.5 text-left text-slate-200 hover:bg-slate-800"
               @click="popOutTab(tabMenu.id)"
@@ -1880,7 +1961,7 @@ async function deleteIdentityRow(id: string) {
 
     <div
       v-if="showApiKeys"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div
         class="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl"
@@ -2017,7 +2098,7 @@ async function deleteIdentityRow(id: string) {
 
     <div
       v-if="showAuditLog"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div
         class="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl"
@@ -2095,7 +2176,7 @@ async function deleteIdentityRow(id: string) {
 
     <div
       v-if="showIdentities"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       @click.self="showIdentities = false"
     >
       <div class="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-800 bg-surface-raised shadow-xl">
@@ -2171,7 +2252,7 @@ async function deleteIdentityRow(id: string) {
 
     <div
       v-if="showIdentityForm"
-      class="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+      class="vantage-modal fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
     >
       <form
         class="max-h-[90vh] w-full max-w-lg overflow-auto rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl"
@@ -2243,7 +2324,7 @@ async function deleteIdentityRow(id: string) {
 
     <div
       v-if="showEditIdentity"
-      class="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+      class="vantage-modal fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
     >
       <form
         class="max-h-[90vh] w-full max-w-lg overflow-auto rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl"
@@ -2312,8 +2393,61 @@ async function deleteIdentityRow(id: string) {
     </div>
 
     <div
+      v-if="showQuick"
+      class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+    >
+      <form
+        class="max-h-[90vh] w-full max-w-md overflow-auto rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl"
+        @submit.prevent="submitQuick"
+      >
+        <h2 class="text-lg font-semibold text-white">Quick connect</h2>
+        <p class="mt-1 text-xs text-slate-500">This connection is not saved.</p>
+        <label class="mt-4 block text-xs uppercase text-slate-500">Protocol</label>
+        <select
+          v-model="quickForm.protocol"
+          class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm"
+          @change="quickForm.port = defaultPort(quickForm.protocol); if (quickForm.protocol !== 'ssh') quickForm.auth_type = 'password'"
+        >
+          <option value="ssh">SSH</option>
+          <option value="vnc">VNC</option>
+          <option value="rdp">RDP</option>
+        </select>
+        <label class="mt-3 block text-xs uppercase text-slate-500">Hostname or IP</label>
+        <input v-model="quickForm.hostname" required class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        <label class="mt-3 block text-xs uppercase text-slate-500">Port</label>
+        <input v-model.number="quickForm.port" type="number" required class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        <label class="mt-3 block text-xs uppercase text-slate-500">{{ credUsernameLabel(quickForm.protocol) }}</label>
+        <input v-model="quickForm.ssh_username" :required="quickForm.protocol !== 'vnc'" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        <template v-if="quickForm.protocol === 'ssh'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">Auth type</label>
+          <select v-model="quickForm.auth_type" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm">
+            <option value="password">Password</option>
+            <option value="publickey">Private key</option>
+          </select>
+        </template>
+        <template v-if="quickForm.protocol !== 'ssh' || quickForm.auth_type === 'password'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">Password</label>
+          <input v-model="quickForm.password" type="password" :required="quickForm.protocol === 'rdp' || (quickForm.protocol === 'ssh' && quickForm.auth_type === 'password')" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        </template>
+        <template v-else>
+          <label class="mt-3 block text-xs uppercase text-slate-500">Private key</label>
+          <textarea v-model="quickForm.private_key" required rows="4" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 font-mono text-xs" placeholder="-----BEGIN PRIVATE KEY-----" />
+          <label class="mt-3 block text-xs uppercase text-slate-500">Key passphrase (optional)</label>
+          <input v-model="quickForm.key_passphrase" type="password" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        </template>
+        <p v-if="quickErr" class="mt-3 text-sm text-red-400">{{ quickErr }}</p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button type="button" class="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-white/10" @click="showQuick = false">Cancel</button>
+          <button type="submit" class="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-slate-950 hover:bg-accent-muted" :disabled="quickBusy">
+            {{ quickBusy ? "Connecting…" : "Connect" }}
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div
       v-if="showHostForm"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <form
         class="w-full max-w-md rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl"
@@ -2475,7 +2609,7 @@ async function deleteIdentityRow(id: string) {
 
     <div
       v-if="showFolderForm"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <form
         class="w-full max-w-sm rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl"
@@ -2511,7 +2645,7 @@ async function deleteIdentityRow(id: string) {
 
     <div
       v-if="showEditFolder"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <form
         class="w-full max-w-sm rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl"
@@ -2544,7 +2678,7 @@ async function deleteIdentityRow(id: string) {
 
     <div
       v-if="showEditHost"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <form
         class="max-h-[90vh] w-full max-w-md overflow-auto rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl"
@@ -2724,7 +2858,7 @@ async function deleteIdentityRow(id: string) {
 
     <div
       v-if="showSettings"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <form
         class="max-h-[90vh] w-full max-w-lg overflow-auto rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl"

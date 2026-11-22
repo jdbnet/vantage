@@ -186,7 +186,7 @@ function terminalTheme() {
     };
   }
   return {
-    background: "#0d1117",
+    background: "#070708",
     foreground: "#e6edf3",
     cursor: "#1ebe8a",
     selectionBackground: "rgba(30, 190, 138, 0.3)",
@@ -1596,7 +1596,7 @@ watch(
       <div
         v-if="protocol === 'ssh'"
         ref="termEl"
-        class="h-full min-h-[320px] overflow-hidden rounded-lg border border-slate-800 bg-[#0d1117] p-1"
+        class="h-full min-h-[320px] overflow-hidden rounded-lg border border-slate-800 bg-[#070708] p-1"
       />
       <div
         v-else
@@ -1622,13 +1622,13 @@ watch(
     <template v-if="showSftp && protocol === 'ssh'">
       <div
         v-if="connId"
-        class="hidden h-full w-80 shrink-0 flex-col border-l border-slate-800 md:flex"
+        class="flex h-full w-80 shrink-0 flex-col border-l border-slate-800"
       >
         <SftpPanel kind="sftp" :conn-id="connId" />
       </div>
       <div
         v-else
-        class="hidden w-72 shrink-0 items-center justify-center border-l border-slate-800 bg-surface-raised text-xs text-slate-500 md:flex"
+        class="flex w-72 shrink-0 items-center justify-center border-l border-slate-800 bg-surface-raised text-xs text-slate-500"
       >
         SFTP unlocks when the shell session is ready.
       </div>
