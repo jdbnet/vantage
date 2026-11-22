@@ -82,7 +82,7 @@ jobs:
       - name: Install Wails
         shell: bash
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+          go install -tags gtk3 github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Set Wails product version
