@@ -1,11 +1,9 @@
-//go:build linux
+//go:build linux && gtk3
 
 package main
 
 /*
-#cgo pkg-config: gtk+-3.0
-#cgo !webkit2_41 pkg-config: webkit2gtk-4.0
-#cgo webkit2_41 pkg-config: webkit2gtk-4.1
+#cgo pkg-config: gtk+-3.0 webkit2gtk-4.1
 #include "popout_linux.h"
 */
 import "C"

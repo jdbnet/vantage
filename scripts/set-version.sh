@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sync VERSION into cmd/vantage/wails.json (Windows exe metadata and NSIS installers).
+# Sync VERSION into the desktop Wails project metadata.
 cd "$(dirname "$0")/.."
 
 resolve_version() {
@@ -57,6 +57,36 @@ update_wails() {
   exit 1
 }
 
+update_wails_yaml() {
+  local file="cmd/vantage/wails.yaml"
+  local version="$1"
+  if [ ! -f "${file}" ]; then
+    echo "missing ${file}" >&2
+    exit 1
+  fi
+  python3 - "${file}" "${version}" <<'PY'
+import pathlib, sys
+path, version = sys.argv[1:]
+file = pathlib.Path(path)
+lines = file.read_text().splitlines()
+out = []
+seen_version = False
+for line in lines:
+    if line.startswith("  version:") and not seen_version:
+        out.append(f'  version: "{version}"')
+        seen_version = True
+        continue
+    if "appcore.Version=" in line:
+        out.append(f"    - github.com/jdbnet/vantage/internal/appcore.Version={version}")
+        continue
+    out.append(line)
+if not seen_version:
+    raise SystemExit("project.version not found in wails.yaml")
+file.write_text("\n".join(out) + "\n")
+PY
+}
+
 version="$(resolve_version)"
 update_wails "${version}"
-echo "==> Version ${version} synced to cmd/vantage/wails.json"
+update_wails_yaml "${version}"
+echo "==> Version ${version} synced to cmd/vantage/wails.json and cmd/vantage/wails.yaml"

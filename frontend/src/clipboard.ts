@@ -1,5 +1,5 @@
 import { isDesktopShell } from "@/api";
-import { getDesktopBridge } from "@/desktopBridge";
+import { desktopReadClipboard, desktopWriteClipboard } from "@/desktopBridge";
 
 const CLIPBOARD_MAX = 1024 * 1024;
 
@@ -21,14 +21,11 @@ export function trimClipboardText(text: string): string {
 
 async function readNativeClipboard(win: Window): Promise<string | null> {
   if (isDesktopShell()) {
-    const bridge = getDesktopBridge();
-    if (bridge?.ReadClipboard) {
-      try {
-        const text = await bridge.ReadClipboard();
-        if (text) return text;
-      } catch {
-        /* try web clipboard below */
-      }
+    try {
+      const text = await desktopReadClipboard();
+      if (text) return text;
+    } catch {
+      /* try web clipboard below */
     }
   }
   try {
@@ -42,14 +39,11 @@ async function readNativeClipboard(win: Window): Promise<string | null> {
 
 async function writeNativeClipboard(win: Window, text: string): Promise<void> {
   if (isDesktopShell()) {
-    const bridge = getDesktopBridge();
-    if (bridge?.WriteClipboard) {
-      try {
-        await bridge.WriteClipboard(text);
-        return;
-      } catch {
-        /* try web clipboard below */
-      }
+    try {
+      await desktopWriteClipboard(text);
+      return;
+    } catch {
+      /* try web clipboard below */
     }
   }
   try {

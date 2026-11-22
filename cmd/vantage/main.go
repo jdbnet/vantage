@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 	"os"
@@ -9,11 +8,8 @@ import (
 	"runtime"
 
 	"github.com/jdbnet/vantage/internal/appcore"
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/menu"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 func main() {
@@ -35,48 +31,42 @@ func main() {
 	}()
 
 	desktop := NewDesktop()
-
-	var appMenu *menu.Menu
-	if runtime.GOOS == "darwin" {
-		appMenu = menu.NewMenu()
-		appMenu.Append(menu.AppMenu())
-		appMenu.Append(menu.EditMenu())
-	}
-
-	err = wails.Run(&options.App{
-		Title:     "Vantage",
-		Width:     1400,
-		Height:    900,
-		MinWidth:  800,
-		MinHeight: 600,
-		MaxWidth:  16384,
-		MaxHeight: 16384,
-		AssetServer: &assetserver.Options{
+	app := application.New(application.Options{
+		Name:        "Vantage",
+		Description: "SSH, VNC, and RDP client",
+		Services: []application.Service{
+			application.NewService(desktop),
+		},
+		Assets: application.AssetOptions{
 			Handler: core.Handler(),
 		},
-		BackgroundColour: &options.RGBA{R: 13, G: 17, B: 23, A: 255},
-		Menu:             appMenu,
-		Mac: &mac.Options{
-			Preferences: &mac.Preferences{
-				FullscreenEnabled: mac.Enabled,
-			},
-		},
-		Bind: []interface{}{
-			desktop,
-		},
-		OnStartup: func(ctx context.Context) {
-			desktop.setContext(ctx)
-			enableWebkitPopouts()
-		},
-		OnDomReady: func(ctx context.Context) {
-			desktop.setContext(ctx)
-			enableWebkitPopouts()
-		},
-		OnShutdown: func(ctx context.Context) {
+		OnShutdown: func() {
 			_ = core.Close()
 		},
 	})
-	if err != nil {
+
+	if runtime.GOOS == "darwin" {
+		appMenu := app.Menu.New()
+		appMenu.AddRole(application.AppMenu)
+		appMenu.AddRole(application.EditMenu)
+		app.Menu.Set(appMenu)
+	}
+
+	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:            "Vantage",
+		Width:            1400,
+		Height:           900,
+		MinWidth:         800,
+		MinHeight:        600,
+		MaxWidth:         16384,
+		MaxHeight:        16384,
+		BackgroundColour: application.NewRGB(13, 17, 23),
+	})
+	window.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
+		enableWebkitPopouts()
+	})
+
+	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

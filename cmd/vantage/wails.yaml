@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://v3.wails.io/schemas/wails.v3.json
+version: 3
+project:
+  name: vantage
+  product_name: Vantage
+  identifier: uk.co.jdbnet.vantage
+  version: "0.0.0"
+  binary_name: vantage
+  company: JDB-NET Limited
+  description: SSH, VNC, and RDP client
+  copyright: Copyright JDB-NET Limited
+  comments: SSH, VNC, and RDP client
+frontend:
+  disabled: true
+build:
+  output: build/bin
+  tags:
+    - gtk3
+  ldflags:
+    - -s
+    - -w
+    - -X
+    - github.com/jdbnet/vantage/internal/appcore.Version=0.0.0
