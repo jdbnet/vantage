@@ -6,15 +6,17 @@ project:
   identifier: uk.co.jdbnet.vantage
   version: "0.0.0"
   binary_name: vantage
-  icon: build/appicon.png
+  package: ./cmd/vantage
+  icon: cmd/vantage/build/appicon.png
   company: JDB-NET Limited
   description: SSH, VNC, and RDP client
   copyright: Copyright JDB-NET Limited
   comments: SSH, VNC, and RDP client
 frontend:
+  directory: frontend
   disabled: true
 build:
-  output: build/bin
+  output: cmd/vantage/build/bin
   tags:
     - gtk3
   ldflags:

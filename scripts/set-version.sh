@@ -58,7 +58,7 @@ update_wails() {
 }
 
 update_wails_yaml() {
-  local file="cmd/vantage/wails.yaml"
+  local file="wails.yaml"
   local version="$1"
   if [ ! -f "${file}" ]; then
     echo "missing ${file}" >&2
@@ -89,4 +89,4 @@ PY
 version="$(resolve_version)"
 update_wails "${version}"
 update_wails_yaml "${version}"
-echo "==> Version ${version} synced to cmd/vantage/wails.json and cmd/vantage/wails.yaml"
+echo "==> Version ${version} synced to cmd/vantage/wails.json and wails.yaml"
