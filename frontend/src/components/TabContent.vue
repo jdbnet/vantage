@@ -94,7 +94,6 @@ const hostKeyPrompt = ref<HostKeyPrompt | null>(null);
 const showSearch = ref(false);
 const searchQuery = ref("");
 const isFullscreen = ref(false);
-const fullscreenReveal = ref(false);
 
 let ws: WebSocket | null = null;
 let term: Terminal | null = null;
@@ -1496,19 +1495,16 @@ watch(
       </div>
       <div
         v-if="isFullscreen || poppedOut"
-        class="fixed left-0 top-0 z-[100] h-16 w-28"
-        @mouseenter="fullscreenReveal = true"
-        @mouseleave="fullscreenReveal = false"
+        class="group fixed left-0 top-1/2 z-[100] -translate-y-1/2"
       >
         <button
-          v-show="fullscreenReveal"
           type="button"
-          class="absolute left-2 top-2 rounded bg-black/80 p-1.5 text-slate-200 shadow-lg hover:bg-black hover:text-white"
+          class="-translate-x-[calc(100%-3px)] rounded-r bg-black/80 p-1 text-slate-300 shadow transition-transform duration-150 hover:text-white group-hover:translate-x-0"
           :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
           @click="toggleFullscreen"
         >
-          <Minimize2 v-if="isFullscreen" class="h-4 w-4" />
-          <Maximize2 v-else class="h-4 w-4" />
+          <Minimize2 v-if="isFullscreen" class="h-3 w-3" />
+          <Maximize2 v-else class="h-3 w-3" />
         </button>
       </div>
       <div
