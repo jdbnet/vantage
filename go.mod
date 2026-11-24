@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/oklog/ulid/v2 v2.1.2
-	github.com/pkg/sftp v1.13.12
+	github.com/pkg/sftp v1.13.13
 	github.com/wailsapp/wails/v3 v3.1.0
 	github.com/wwt/guac v1.3.2
 	golang.org/x/crypto v0.59.0
