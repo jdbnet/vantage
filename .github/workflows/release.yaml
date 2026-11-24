@@ -127,6 +127,8 @@ jobs:
         if: matrix.target == 'macos'
         run: |
           mkdir -p desktop-artifacts
+          codesign --remove-signature cmd/vantage/build/bin/vantage.app/Contents/MacOS/vantage || true
+          codesign --remove-signature cmd/vantage/build/bin/vantage.app || true
           ditto -c -k --keepParent cmd/vantage/build/bin/vantage.app "desktop-artifacts/vantage_${VERSION}_darwin_arm64.zip"
 
       - name: Stage Linux binary and deb

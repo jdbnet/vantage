@@ -24,3 +24,5 @@ build:
     - -w
     - -X
     - github.com/jdbnet/vantage/internal/appcore.Version=0.0.0
+darwin:
+  icon: cmd/vantage/build/darwin/icons.icns
