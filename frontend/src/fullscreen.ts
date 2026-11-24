@@ -3,7 +3,16 @@ export function wailsRuntime(): WailsRuntime | undefined {
 }
 
 export function useMacNativeFullscreen(): boolean {
-  return typeof wailsRuntime()?.WindowFullscreen === "function" && /Mac/i.test(navigator.userAgent);
+  const host = navigator.userAgent || "";
+  if (!/Mac/i.test(host)) return false;
+  const protocol = location.protocol;
+  const name = location.hostname || location.host;
+  return (
+    protocol.startsWith("wails") ||
+    name === "wails" ||
+    name === "wails.localhost" ||
+    name.endsWith(".wails.localhost")
+  );
 }
 
 export type FullscreenDocument = Document & {

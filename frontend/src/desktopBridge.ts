@@ -30,6 +30,14 @@ export async function desktopWriteClipboard(text: string): Promise<void> {
   await callDesktop("WriteClipboard", text);
 }
 
+export async function desktopToggleFullscreen(): Promise<boolean> {
+  return (await callDesktop("ToggleFullscreen")) === true;
+}
+
+export async function desktopWindowIsFullscreen(): Promise<boolean> {
+  return (await callDesktop("WindowIsFullscreen")) === true;
+}
+
 export async function desktopPopoutSupported(): Promise<boolean> {
   if (!isDesktopShell()) return false;
   try {

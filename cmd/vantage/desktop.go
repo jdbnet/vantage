@@ -56,6 +56,42 @@ func (d *Desktop) ReadClipboard() (string, error) {
 	return text, nil
 }
 
+// ToggleFullscreen switches the window that handled this call.
+// It returns whether that window is fullscreen afterwards.
+func (d *Desktop) ToggleFullscreen() (bool, error) {
+	win, err := currentWindow()
+	if err != nil {
+		return false, err
+	}
+	if win.IsFullscreen() {
+		win.UnFullscreen()
+		return false, nil
+	}
+	win.Fullscreen()
+	return true, nil
+}
+
+// WindowIsFullscreen reports whether the window that handled this call is fullscreen.
+func (d *Desktop) WindowIsFullscreen() (bool, error) {
+	win, err := currentWindow()
+	if err != nil {
+		return false, err
+	}
+	return win.IsFullscreen(), nil
+}
+
+func currentWindow() (application.Window, error) {
+	app := application.Get()
+	if app == nil {
+		return nil, errors.New("desktop shell not ready")
+	}
+	win := app.Window.Current()
+	if win == nil {
+		return nil, errors.New("no active window")
+	}
+	return win, nil
+}
+
 // WriteClipboard sets the host system clipboard to plain text.
 func (d *Desktop) WriteClipboard(text string) error {
 	app := application.Get()

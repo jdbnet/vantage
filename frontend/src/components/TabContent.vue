@@ -20,7 +20,6 @@ import {
   type FullscreenDocument,
   type FullscreenHost,
   useMacNativeFullscreen,
-  wailsRuntime,
 } from "@/fullscreen";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -29,8 +28,9 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import SftpPanel from "./SftpPanel.vue";
 import Guacamole from "guacamole-common-js";
-import { Maximize2, Minimize2, Search, X } from "@lucide/vue";
+import { Minimize2, Search, X } from "@lucide/vue";
 import { addGuacKeySink, removeGuacKeySink, type GuacKeySink } from "@/guacKeyboard";
+import { desktopToggleFullscreen, desktopWindowIsFullscreen } from "@/desktopBridge";
 import {
   readClipboard,
   rememberClipboard,
@@ -1171,10 +1171,8 @@ function runSearch(dir: "next" | "prev") {
 }
 
 async function syncMacNativeFullscreen() {
-  const rt = wailsRuntime();
-  if (!rt?.WindowIsFullscreen) return;
   try {
-    isFullscreen.value = !!(await rt.WindowIsFullscreen());
+    isFullscreen.value = await desktopWindowIsFullscreen();
     notifyFullscreenChange();
   } catch {
     /* ignore */
@@ -1194,13 +1192,9 @@ async function exitFullscreen() {
 async function toggleFullscreen() {
   const el = sessionPane.value as FullscreenHost | null;
   if (!el) return;
-  const rt = wailsRuntime();
-  if (useMacNativeFullscreen() && rt) {
+  if (useMacNativeFullscreen()) {
     try {
-      const on = rt.WindowIsFullscreen ? !!(await rt.WindowIsFullscreen()) : isFullscreen.value;
-      if (on) rt.WindowUnfullscreen?.();
-      else rt.WindowFullscreen?.();
-      isFullscreen.value = !on;
+      isFullscreen.value = await desktopToggleFullscreen();
       notifyFullscreenChange();
       nextTick(() => {
         fitAndResize();
@@ -1493,20 +1487,15 @@ watch(
       >
         {{ status }}
       </div>
-      <div
-        v-if="isFullscreen || poppedOut"
-        class="group fixed left-0 top-1/2 z-[100] mt-[-0.75rem] h-6 w-[3px] overflow-hidden transition-[width] duration-150 hover:w-7"
+      <button
+        v-if="isFullscreen"
+        type="button"
+        class="absolute left-0 top-[calc(50%-0.75rem)] z-30 flex h-6 w-4 items-center justify-center rounded-r bg-black text-slate-300 hover:text-white"
+        title="Exit fullscreen"
+        @click="toggleFullscreen"
       >
-        <button
-          type="button"
-          class="flex h-6 w-7 items-center justify-center rounded-r bg-black/80 text-slate-300 hover:text-white"
-          :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
-          @click="toggleFullscreen"
-        >
-          <Minimize2 v-if="isFullscreen" class="h-3 w-3" />
-          <Maximize2 v-else class="h-3 w-3" />
-        </button>
-      </div>
+        <Minimize2 class="h-3 w-3" />
+      </button>
       <div
         v-if="showSearch && protocol === 'ssh'"
         class="absolute left-3 right-3 top-2 z-20 flex items-center gap-1 rounded border border-slate-700 bg-slate-900/95 p-1"
@@ -1605,7 +1594,7 @@ watch(
         />
         <textarea
           ref="guacClipboardEl"
-          class="pointer-events-none absolute h-px w-px opacity-0"
+          class="pointer-events-none absolute -left-[10000px] top-0 h-px w-px"
           tabindex="-1"
           aria-hidden="true"
           autocomplete="off"

@@ -14,7 +14,6 @@ html {
     radial-gradient(ellipse 90% 55% at 50% -20%, rgba(255, 255, 255, 0.14), transparent 58%),
     radial-gradient(ellipse 50% 40% at 100% 0%, rgba(255, 255, 255, 0.05), transparent 50%),
     linear-gradient(180deg, #1a1a1e 0%, #0c0c0e 42%, #09090b 100%);
-  background-attachment: fixed;
 }
 
 button:not(:disabled) {
