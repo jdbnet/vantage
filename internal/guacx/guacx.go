@@ -26,6 +26,11 @@ type Params struct {
 	DriveName   string
 }
 
+// guacdIdleTimeout is how long a display may sit without a new instruction
+// before the socket is treated as dead. The library default is 15 seconds,
+// which drops a quiet RDP or VNC session.
+const guacdIdleTimeout = 24 * time.Hour
+
 func Open(p Params) (guac.Tunnel, error) {
 	if p.GuacdAddr == "" {
 		return nil, fmt.Errorf("guacd address is not configured")
@@ -45,7 +50,7 @@ func Open(p Params) (guac.Tunnel, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("guacd: expected tcp")
 	}
-	stream := guac.NewStream(tcp, guac.SocketTimeout)
+	stream := guac.NewStream(tcp, guacdIdleTimeout)
 	if err := stream.Handshake(cfg); err != nil {
 		_ = tcp.Close()
 		return nil, fmt.Errorf("guacd handshake: %w", err)

@@ -1495,11 +1495,11 @@ watch(
       </div>
       <div
         v-if="isFullscreen || poppedOut"
-        class="group fixed left-0 top-1/2 z-[100] -translate-y-1/2"
+        class="group fixed left-0 top-1/2 z-[100] mt-[-0.75rem] h-6 w-[3px] overflow-hidden transition-[width] duration-150 hover:w-7"
       >
         <button
           type="button"
-          class="-translate-x-[calc(100%-3px)] rounded-r bg-black/80 p-1 text-slate-300 shadow transition-transform duration-150 hover:text-white group-hover:translate-x-0"
+          class="flex h-6 w-7 items-center justify-center rounded-r bg-black/80 text-slate-300 hover:text-white"
           :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
           @click="toggleFullscreen"
         >
