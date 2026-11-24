@@ -16,7 +16,7 @@
     "@lucide/vue": "1.79.0",
     "pinia": "^4.1.0",
     "vue": "^3.5.46",
-    "guacamole-common-js": "^1.5.0"
+    "guacamole-common-js": "^1.6.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.11",
