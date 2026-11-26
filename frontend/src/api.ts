@@ -526,12 +526,12 @@ export const api = {
     await handle(res);
   },
 
-  async sftpRemove(connId: string, path: string): Promise<void> {
+  async sftpRemove(connId: string, path: string, recursive = false): Promise<void> {
     const res = await apiFetch(`/api/sftp/${connId}/remove`, {
       method: "POST",
       credentials: "include",
       headers: jsonHeaders,
-      body: JSON.stringify({ path }),
+      body: JSON.stringify({ path, recursive }),
     });
     await handle(res);
   },
@@ -673,6 +673,107 @@ export const api = {
     const q = new URLSearchParams({ path });
     return withAuthQuery(`/api/shared/${hostId}/download?${q}`);
   },
+
+  async localList(path: string): Promise<{ path: string; entries: SftpEntry[] }> {
+    const res = await apiFetch("/api/local/list", {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify({ path }),
+    });
+    return handle(res);
+  },
+
+  async localMkdir(path: string): Promise<void> {
+    const res = await apiFetch("/api/local/mkdir", {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify({ path }),
+    });
+    await handle(res);
+  },
+
+  async localRename(oldPath: string, newPath: string): Promise<void> {
+    const res = await apiFetch("/api/local/rename", {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify({ old_path: oldPath, new_path: newPath }),
+    });
+    await handle(res);
+  },
+
+  async localRemove(path: string): Promise<void> {
+    const res = await apiFetch("/api/local/remove", {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify({ path }),
+    });
+    await handle(res);
+  },
+
+  localDownloadUrl(path: string): string {
+    const q = new URLSearchParams({ path });
+    return withAuthQuery(`/api/local/download?${q}`);
+  },
+
+  localStreamUrl(path: string): string {
+    const q = new URLSearchParams({ path });
+    return withAuthQuery(`/api/local/stream?${q}`);
+  },
+
+  sftpStreamUrl(connId: string, path: string): string {
+    const q = new URLSearchParams({ path });
+    return withAuthQuery(`/api/sftp/${connId}/stream?${q}`);
+  },
+
+  async createTransfer(
+    sources: { system: string; conn_id: string; path: string }[],
+    dest: { system: string; conn_id: string; path: string },
+  ): Promise<string> {
+    const res = await apiFetch("/api/files/transfers", {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify({ sources, dest }),
+    });
+    const data = await handle<{ id: string }>(res);
+    return data.id;
+  },
+
+  async listTransfers(): Promise<FileTransfer[]> {
+    const res = await apiFetch("/api/files/transfers", { credentials: "include" });
+    const data = await handle<{ transfers: FileTransfer[] }>(res);
+    return data.transfers || [];
+  },
+
+  async cancelTransfer(id: string): Promise<void> {
+    const res = await apiFetch(`/api/files/transfers/${id}/cancel`, {
+      method: "POST",
+      credentials: "include",
+    });
+    await handle(res);
+  },
+
+  async resolveTransfer(id: string, action: string, applyAll: boolean): Promise<void> {
+    const res = await apiFetch(`/api/files/transfers/${id}/resolve`, {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify({ action, apply_all: applyAll }),
+    });
+    await handle(res);
+  },
+
+  async cancelSessionTransfers(connId: string): Promise<void> {
+    const res = await apiFetch(`/api/files/sessions/${connId}/cancel`, {
+      method: "POST",
+      credentials: "include",
+    });
+    await handle(res);
+  },
 };
 
 export interface FolderRow {
@@ -719,6 +820,18 @@ export interface SftpEntry {
   st_mode: number;
   st_size: number;
   st_mtime: number;
+}
+
+export interface FileTransfer {
+  id: string;
+  state: string;
+  bytes: number;
+  total: number;
+  started?: string;
+  error?: string;
+  conflict?: string;
+  sources?: { system: string; conn_id: string; path: string }[];
+  dest?: { system: string; conn_id: string; path: string };
 }
 
 export interface ConnectionAuditRow {

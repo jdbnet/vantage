@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch, nextTick, computed } from "vue";
-import { Folder, FolderPlus, KeyRound, Pencil, Plug, Plus, Trash2, Radio, ChevronDown, Settings, SquareArrowOutUpRight, Maximize2 } from "@lucide/vue";
+import { Folder, FolderPlus, KeyRound, Pencil, Plug, Plus, Trash2, Radio, ChevronDown, Settings, SquareArrowOutUpRight, Maximize2, Files } from "@lucide/vue";
 import {
   api,
   type HostRow,
@@ -17,6 +17,7 @@ import {
 } from "@/api";
 import LoginForm from "@/components/LoginForm.vue";
 import TabContent from "@/components/TabContent.vue";
+import FileManager from "@/components/FileManager.vue";
 import TagInput from "@/components/TagInput.vue";
 import SnippetForm from "@/components/SnippetForm.vue";
 import { applyAccent, DEFAULT_ACCENT, normalizeAccent } from "@/theme";
@@ -370,6 +371,8 @@ const showEditHost = ref(false);
 const showAuditLog = ref(false);
 const showApiKeys = ref(false);
 const showSftpPanel = ref(false);
+const showFileManager = ref(false);
+const sshSessions = ref<{ tabId: string; connId: string; label: string }[]>([]);
 const showSettings = ref(false);
 const appMode = ref("");
 const appSettings = ref<AppSettings | null>(null);
@@ -415,6 +418,19 @@ const backupErr = ref("");
 const importFile = ref<HTMLInputElement | null>(null);
 function toggleSftp() {
   showSftpPanel.value = !showSftpPanel.value;
+}
+
+function onSessionReady(tabId: string, connId: string) {
+  const label = tabs.value.find((t) => t.id === tabId)?.label || "SSH";
+  sshSessions.value = [
+    ...sshSessions.value.filter((s) => s.tabId !== tabId),
+    { tabId, connId, label },
+  ];
+}
+
+function onSessionEnded(tabId: string, connId: string) {
+  sshSessions.value = sshSessions.value.filter((s) => s.tabId !== tabId);
+  void api.cancelSessionTransfers(connId);
 }
 
 function filesPanelLabel(): string | null {
@@ -1584,6 +1600,15 @@ async function deleteIdentityRow(id: string) {
           </div>
         </div>
         <button
+          type="button"
+          class="inline-flex h-8 items-center gap-1 rounded-md px-3 text-xs"
+          :class="showFileManager ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'"
+          @click="showFileManager = !showFileManager"
+        >
+          <Files class="h-3.5 w-3.5" />
+          Files
+        </button>
+        <button
           v-if="filesPanelLabel()"
           type="button"
           class="inline-flex h-8 items-center rounded-md px-3 text-xs"
@@ -1850,6 +1875,13 @@ async function deleteIdentityRow(id: string) {
         </div>
       </aside>
       <main class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <FileManager
+          v-show="showFileManager"
+          class="min-h-0 flex-1"
+          :sessions="sshSessions"
+          :open="showFileManager"
+        />
+        <div v-show="!showFileManager" class="flex min-h-0 flex-1 flex-col">
         <div
           v-if="!tabs.length"
           class="flex flex-1 items-center justify-center text-sm text-slate-500"
@@ -1946,6 +1978,8 @@ async function deleteIdentityRow(id: string) {
                   :settings="appSettings"
                   @broadcast-data="(data: string) => handleBroadcast(data, t.id)"
                   @fullscreen-change="(on: boolean) => onTabFullscreenChange(t.id, on)"
+                  @session-ready="(connId: string) => onSessionReady(t.id, connId)"
+                  @session-ended="(connId: string) => onSessionEnded(t.id, connId)"
                 />
               </Teleport>
             </div>
@@ -1960,6 +1994,7 @@ async function deleteIdentityRow(id: string) {
             </div>
           </div>
         </template>
+        </div>
       </main>
     </div>
 

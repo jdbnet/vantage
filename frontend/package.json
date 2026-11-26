@@ -9,23 +9,23 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@lucide/vue": "^1.81.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
-    "@lucide/vue": "1.81.0",
+    "guacamole-common-js": "^1.6.0",
     "pinia": "^4.1.0",
-    "vue": "^3.5.46",
-    "guacamole-common-js": "^1.6.0"
+    "vue": "^3.5.46"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^6.0.11",
     "@tailwindcss/postcss": "^4.3.5",
+    "@vitejs/plugin-vue": "^6.0.11",
     "autoprefixer": "^10.7.0",
     "postcss": "^8.5.33",
     "tailwindcss": "^4.3.5",
-    "typescript": "~7.0.2",
-    "vite": "^8.3.8",
+    "typescript": "^7.0.2",
+    "vite": "^8.4.0",
     "vue-tsc": "^3.3.14"
   }
 }

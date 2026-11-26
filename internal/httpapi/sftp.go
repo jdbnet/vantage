@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -25,6 +26,20 @@ func (s *Server) sftpClient(w http.ResponseWriter, r *http.Request) (*sftp.Clien
 	return c, true
 }
 
+func (s *Server) resetSFTP(connID string) {
+	if s.d.Conns == nil {
+		return
+	}
+	sess := s.d.Conns.Get(connID)
+	if sess != nil {
+		sess.ResetSFTP()
+	}
+}
+
+func isSFTPDead(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, sftp.ErrSSHFxConnectionLost)
+}
+
 func (s *Server) handleSftpList(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.sftpClient(w, r)
 	if !ok {
@@ -40,6 +55,14 @@ func (s *Server) handleSftpList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fis, err := c.ReadDir(p)
+	if err != nil && isSFTPDead(err) {
+		s.resetSFTP(r.PathValue("cid"))
+		c, ok = s.sftpClient(w, r)
+		if !ok {
+			return
+		}
+		fis, err = c.ReadDir(p)
+	}
 	if err != nil && strings.TrimSpace(body.Path) == "" && p != "/" {
 		p = "/"
 		fis, err = c.ReadDir(p)
@@ -91,7 +114,8 @@ func (s *Server) handleSftpRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Path string `json:"path"`
+		Path      string `json:"path"`
+		Recursive bool   `json:"recursive"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	p, err := sanitizePath(body.Path)
@@ -99,18 +123,23 @@ func (s *Server) handleSftpRemove(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	fi, err := c.Lstat(p)
-	if err != nil {
-		writeErr(w, 400, err.Error())
-		return
-	}
-	if fi.IsDir() {
-		err = c.RemoveDirectory(p)
+	var rmErr error
+	if body.Recursive {
+		rmErr = removeSFTPTree(c, p)
 	} else {
-		err = c.Remove(p)
+		fi, err := c.Lstat(p)
+		if err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		if fi.IsDir() {
+			rmErr = c.RemoveDirectory(p)
+		} else {
+			rmErr = c.Remove(p)
+		}
 	}
-	if err != nil {
-		writeErr(w, 400, err.Error())
+	if rmErr != nil {
+		writeErr(w, 400, rmErr.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -197,6 +226,62 @@ func (s *Server) handleSftpDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+path.Base(p)+"\"")
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = io.Copy(w, f)
+}
+
+func (s *Server) handleSftpStream(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.sftpClient(w, r)
+	if !ok {
+		return
+	}
+	p, err := sanitizePath(r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	f, err := c.Open(p)
+	if err != nil && isSFTPDead(err) {
+		s.resetSFTP(r.PathValue("cid"))
+		c, ok = s.sftpClient(w, r)
+		if !ok {
+			return
+		}
+		f, err = c.Open(p)
+	}
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if info.IsDir() {
+		writeErr(w, 400, "not a file")
+		return
+	}
+	serveStream(w, r, path.Base(p), info.Size(), f)
+}
+
+func removeSFTPTree(c *sftp.Client, p string) error {
+	fi, err := c.Lstat(p)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return c.Remove(p)
+	}
+	entries, err := c.ReadDir(p)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := removeSFTPTree(c, path.Join(p, e.Name())); err != nil {
+			return err
+		}
+	}
+	return c.RemoveDirectory(p)
 }
 
 func sftpListPath(c *sftp.Client, requested string) (string, error) {

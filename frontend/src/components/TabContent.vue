@@ -53,7 +53,16 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "broadcast-data", data: string): void;
   (e: "fullscreen-change", on: boolean): void;
+  (e: "session-ready", connId: string): void;
+  (e: "session-ended", connId: string): void;
 }>();
+
+function setConnId(id: string | null) {
+  const prev = connId.value;
+  if (prev && prev !== id) emit("session-ended", prev);
+  connId.value = id;
+  if (id) emit("session-ready", id);
+}
 
 function notifyFullscreenChange() {
   emit("fullscreen-change", isFullscreen.value);
@@ -288,7 +297,7 @@ function isControlMessage(raw: string): boolean {
       error?: string;
     };
     if (o.type === "ready" && o.conn_id) {
-      connId.value = o.conn_id;
+      setConnId(o.conn_id);
       status.value = "";
       fitAndResize();
       term?.focus();
@@ -369,6 +378,7 @@ function connectSsh() {
     hostKeyPrompt.value = null;
     if (connId.value) {
       status.value = "Session ended";
+      setConnId(null);
     } else if (
       status.value === "Handshaking…" ||
       status.value === "Connecting…" ||
@@ -1151,7 +1161,7 @@ function connectGuac() {
 function reconnect() {
   term?.clear();
   term?.focus();
-  connId.value = null;
+  setConnId(null);
   hostKeyPrompt.value = null;
   status.value = "Connecting…";
   if (isSSH()) connectSsh();
@@ -1411,6 +1421,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  if (connId.value) emit("session-ended", connId.value);
   sessionAlive = false;
   clearPingInterval();
   clearSshFitTimer();

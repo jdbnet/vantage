@@ -63,6 +63,15 @@ func (s *Session) Close() {
 	s.Jumps = nil
 }
 
+func (s *Session) ResetSFTP() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.SFTP != nil {
+		_ = s.SFTP.Close()
+		s.SFTP = nil
+	}
+}
+
 func (s *Session) GetSFTP() (*sftp.Client, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

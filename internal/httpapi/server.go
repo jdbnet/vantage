@@ -42,10 +42,11 @@ type Deps struct {
 }
 
 type Server struct {
-	d     Deps
-	mux   *http.ServeMux
-	upgr  websocket.Upgrader
-	quick quickBook
+	d         Deps
+	mux       *http.ServeMux
+	upgr      websocket.Upgrader
+	quick     quickBook
+	transfers *transferBook
 }
 
 func New(d Deps) http.Handler {
@@ -57,6 +58,7 @@ func New(d Deps) http.Handler {
 			CheckOrigin:     func(r *http.Request) bool { return true },
 			Subprotocols:    []string{"guacamole"},
 		},
+		transfers: newTransferBook(),
 	}
 	mux := http.NewServeMux()
 	s.mux = mux
@@ -125,6 +127,20 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/sftp/{cid}/rename", s.auth("sftp:manage", s.handleSftpRename))
 	mux.HandleFunc("POST /api/sftp/{cid}/upload", s.auth("sftp:manage", s.handleSftpUpload))
 	mux.HandleFunc("GET /api/sftp/{cid}/download", s.auth("sftp:manage", s.handleSftpDownload))
+	mux.HandleFunc("GET /api/sftp/{cid}/stream", s.auth("sftp:manage", s.handleSftpStream))
+
+	mux.HandleFunc("POST /api/local/list", s.auth("sftp:manage", s.handleLocalList))
+	mux.HandleFunc("POST /api/local/mkdir", s.auth("sftp:manage", s.handleLocalMkdir))
+	mux.HandleFunc("POST /api/local/rename", s.auth("sftp:manage", s.handleLocalRename))
+	mux.HandleFunc("POST /api/local/remove", s.auth("sftp:manage", s.handleLocalRemove))
+	mux.HandleFunc("GET /api/local/download", s.auth("sftp:manage", s.handleLocalDownload))
+	mux.HandleFunc("GET /api/local/stream", s.auth("sftp:manage", s.handleLocalStream))
+
+	mux.HandleFunc("POST /api/files/transfers", s.auth("sftp:manage", s.handleCreateTransfer))
+	mux.HandleFunc("GET /api/files/transfers", s.auth("sftp:manage", s.handleListTransfers))
+	mux.HandleFunc("POST /api/files/transfers/{id}/cancel", s.auth("sftp:manage", s.handleCancelTransfer))
+	mux.HandleFunc("POST /api/files/transfers/{id}/resolve", s.auth("sftp:manage", s.handleResolveTransfer))
+	mux.HandleFunc("POST /api/files/sessions/{cid}/cancel", s.auth("sftp:manage", s.handleCancelSessionTransfers))
 
 	mux.HandleFunc("POST /api/shared/{host_id}/list", s.auth("sftp:manage", s.handleSharedList))
 	mux.HandleFunc("POST /api/shared/{host_id}/mkdir", s.auth("sftp:manage", s.handleSharedMkdir))

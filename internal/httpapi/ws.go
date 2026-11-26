@@ -267,6 +267,7 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	}
 	s.d.Conns.Put(sess)
 	defer func() {
+		s.cancelTransfers(sess.ID)
 		s.d.Conns.Pop(sess.ID)
 		sess.Close()
 		if sess.AuditID != 0 {
