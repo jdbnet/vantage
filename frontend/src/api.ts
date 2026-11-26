@@ -80,7 +80,7 @@ export function authQuery(): string {
   return t ? `token=${encodeURIComponent(t)}` : "";
 }
 
-function withAuthQuery(url: string): string {
+export function withAuthQuery(url: string): string {
   const q = authQuery();
   if (!q) return url;
   return url + (url.includes("?") ? "&" : "?") + q;

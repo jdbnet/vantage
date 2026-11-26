@@ -13,6 +13,7 @@ import {
   type HostProtocol,
   type Settings as AppSettings,
   type SyncStatus,
+  withAuthQuery,
 } from "@/api";
 import LoginForm from "@/components/LoginForm.vue";
 import TabContent from "@/components/TabContent.vue";
@@ -20,7 +21,7 @@ import TagInput from "@/components/TagInput.vue";
 import SnippetForm from "@/components/SnippetForm.vue";
 import { applyAccent, DEFAULT_ACCENT, normalizeAccent } from "@/theme";
 import { openPopout, type PopoutHandle } from "@/popout";
-import { saveBlobAsFile } from "@/download";
+import { saveRemoteFile } from "@/download";
 import { desktopPopoutSupported } from "@/desktopBridge";
 
 interface TabItem {
@@ -1066,8 +1067,7 @@ async function downloadBackup() {
     return;
   }
   try {
-    const blob = await api.exportInventory();
-    await saveBlobAsFile(blob, "vantage-backup.json");
+    await saveRemoteFile(withAuthQuery("/api/export"), "vantage-backup.json");
   } catch (e) {
     backupErr.value = e instanceof Error ? e.message : "Export failed";
   }

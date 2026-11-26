@@ -16,6 +16,11 @@ async function callDesktop(method: string, ...args: unknown[]): Promise<unknown>
   return runtime.Call.ByName(`main.Desktop.${method}`, ...args);
 }
 
+export async function desktopSaveDownload(defaultFilename: string, apiPath: string): Promise<string> {
+  const path = await callDesktop("SaveDownload", defaultFilename, apiPath);
+  return typeof path === "string" ? path : "";
+}
+
 export async function desktopSaveFile(defaultFilename: string, data: number[]): Promise<string> {
   const path = await callDesktop("SaveFile", defaultFilename, data);
   return typeof path === "string" ? path : "";
