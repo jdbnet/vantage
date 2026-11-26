@@ -1,44 +1,21 @@
 package httpapi
 
 import (
-	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/jdbnet/vantage/internal/explorer"
 )
 
 func cleanLocalPath(p string) (string, error) {
-	if strings.ContainsRune(p, 0) {
-		return "", errors.New("invalid path")
-	}
-	p = strings.TrimSpace(p)
-	if p == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			p = string(os.PathSeparator)
-		} else {
-			p = home
-		}
-	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", err
-	}
-	abs = filepath.Clean(abs)
-	if !filepath.IsAbs(abs) {
-		return "", errors.New("invalid path")
-	}
-	return abs, nil
+	return explorer.CleanLocalPath(p)
 }
 
 func localIsRoot(p string) bool {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return false
-	}
-	return abs == string(os.PathSeparator) || abs == filepath.VolumeName(abs)+string(os.PathSeparator)
+	return explorer.LocalRoot(p)
 }
 
 func (s *Server) handleLocalList(w http.ResponseWriter, r *http.Request) {

@@ -21,7 +21,7 @@ var DefaultScopes = []model.APIKeyScopeDef{
 	{ID: "write:hosts", Label: "Write hosts", Description: "Create, update, and delete inventory"},
 	{ID: "read:audit", Label: "Read audit", Description: "View connection audit log"},
 	{ID: "terminal:connect", Label: "Terminal", Description: "Open SSH, VNC, and RDP sessions"},
-	{ID: "sftp:manage", Label: "SFTP", Description: "Browse and transfer files over SFTP"},
+	{ID: "sftp:manage", Label: "Files", Description: "Browse and transfer local files, SFTP sessions, and saved remotes"},
 	{ID: "sync", Label: "Sync", Description: "Bidirectional inventory and shared-folder sync with a desktop client"},
 }
 

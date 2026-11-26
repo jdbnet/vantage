@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jdbnet/vantage/internal/explorer"
 	"github.com/jdbnet/vantage/internal/idgen"
 	"github.com/pkg/sftp"
 )
@@ -48,6 +49,13 @@ type transferJob struct {
 	cancel   context.CancelFunc
 	decide   chan string
 	mu       sync.Mutex
+	heldMu   sync.Mutex
+	held     map[string]heldFS
+}
+
+type heldFS struct {
+	exp     explorer.Explorer
+	release func()
 }
 
 type transferBook struct {
@@ -181,6 +189,11 @@ func checkEnd(e *fileEnd) error {
 		}
 		e.Path = p
 		return nil
+	case "remote":
+		if strings.TrimSpace(e.ConnID) == "" {
+			return errors.New("remote required")
+		}
+		return nil
 	default:
 		return errors.New("unknown system")
 	}
@@ -288,6 +301,7 @@ func (j *transferJob) stop(state string) {
 }
 
 func (j *transferJob) run(s *Server) {
+	defer j.releaseHeld()
 	err := j.copyAll(s)
 	j.mu.Lock()
 	terminal := j.State == "cancelled" || j.State == "failed" || j.State == "done"
@@ -318,11 +332,11 @@ func (j *transferJob) copyAll(s *Server) error {
 	if err := j.waitGate(); err != nil {
 		return err
 	}
-	if err := fillHome(s, &j.Dest); err != nil {
+	if err := j.fillHome(s, &j.Dest, "dst"); err != nil {
 		return err
 	}
 	for i := range j.Sources {
-		if err := fillHome(s, &j.Sources[i]); err != nil {
+		if err := j.fillHome(s, &j.Sources[i], "src"); err != nil {
 			return err
 		}
 		if nested(j.Dest, j.Sources[i]) {
@@ -332,7 +346,7 @@ func (j *transferJob) copyAll(s *Server) error {
 	var files []copyItem
 	var total int64
 	for _, src := range j.Sources {
-		walked, err := walkEnd(s, src)
+		walked, err := j.walk(s, src)
 		if err != nil {
 			return err
 		}
@@ -351,7 +365,7 @@ func (j *transferJob) copyAll(s *Server) error {
 			return err
 		}
 		if it.dir {
-			if err := mkdirEnd(s, j.Dest, it.destRel); err != nil {
+			if err := j.mkdirRel(s, it.destRel); err != nil {
 				return err
 			}
 			continue
@@ -371,26 +385,80 @@ func (j *transferJob) copyAll(s *Server) error {
 	return nil
 }
 
-func fillHome(s *Server, e *fileEnd) error {
-	if e.System != "sftp" || strings.TrimSpace(e.Path) != "" {
+func (j *transferJob) fillHome(s *Server, e *fileEnd, role string) error {
+	if strings.TrimSpace(e.Path) != "" {
 		return nil
 	}
-	c, err := s.sftpFrom(e.ConnID)
+	if e.System != "sftp" && e.System != "remote" {
+		return nil
+	}
+	exp, err := j.fs(s, *e, role)
 	if err != nil {
 		return err
 	}
-	wd, err := c.Getwd()
-	if err != nil || strings.TrimSpace(wd) == "" {
+	st, err := exp.Stat("")
+	if err != nil || strings.TrimSpace(st.Path) == "" {
 		e.Path = "/"
 		return nil
 	}
-	p, err := sanitizePath(wd)
-	if err != nil {
-		e.Path = "/"
-		return nil
-	}
-	e.Path = p
+	e.Path = st.Path
 	return nil
+}
+
+func (j *transferJob) fs(s *Server, e fileEnd, role string) (explorer.Explorer, error) {
+	key := e.System + "\x00" + e.ConnID
+	if e.System == "remote" && s.remotes != nil && s.remotes.exclusive(e.ConnID) {
+		key = role + "\x00" + key
+	}
+	j.heldMu.Lock()
+	defer j.heldMu.Unlock()
+	if j.held == nil {
+		j.held = map[string]heldFS{}
+	}
+	if h, ok := j.held[key]; ok {
+		return h.exp, nil
+	}
+	exp, release, err := s.openFS(e, true)
+	if err != nil {
+		return nil, err
+	}
+	j.held[key] = heldFS{exp: exp, release: release}
+	return exp, nil
+}
+
+func (j *transferJob) releaseHeld() {
+	j.heldMu.Lock()
+	defer j.heldMu.Unlock()
+	for _, h := range j.held {
+		if h.release != nil {
+			h.release()
+		}
+	}
+	j.held = nil
+}
+
+func (s *Server) openFS(e fileEnd, dedicated bool) (explorer.Explorer, func(), error) {
+	if s.openHook != nil {
+		return s.openHook(e, dedicated)
+	}
+	switch e.System {
+	case "local":
+		return explorer.NewLocal(), func() {}, nil
+	case "sftp":
+		id := e.ConnID
+		fs := sessionFS{
+			get:   func() (*sftp.Client, error) { return s.sftpFrom(id) },
+			reset: func() { s.resetSFTP(id) },
+		}
+		return fs, func() {}, nil
+	case "remote":
+		if s.remotes == nil {
+			return nil, nil, errors.New("remotes unavailable")
+		}
+		return s.remotes.acquire(e.ConnID, dedicated)
+	default:
+		return nil, nil, errors.New("unknown system")
+	}
 }
 
 func (j *transferJob) waitGate() error {
@@ -420,38 +488,42 @@ type copyItem struct {
 	dir     bool
 }
 
-func walkEnd(s *Server, src fileEnd) ([]copyItem, error) {
-	info, err := statEnd(s, src)
+func (j *transferJob) walk(s *Server, src fileEnd) ([]copyItem, error) {
+	exp, err := j.fs(s, src, "src")
+	if err != nil {
+		return nil, err
+	}
+	info, err := exp.Stat(src.Path)
 	if err != nil {
 		return nil, err
 	}
 	base := baseName(src)
-	root := copyItem{src: src, base: base, destRel: base, size: info.Size(), dir: info.IsDir()}
-	if !info.IsDir() {
+	root := copyItem{src: src, base: base, destRel: base, size: info.Size, dir: info.IsDir}
+	if !info.IsDir {
 		return []copyItem{root}, nil
 	}
 	out := []copyItem{root}
-	kids, err := walkChildren(s, src, base)
+	kids, err := j.walkChildren(s, exp, src, base)
 	if err != nil {
 		return nil, err
 	}
 	return append(out, kids...), nil
 }
 
-func walkChildren(s *Server, src fileEnd, destPrefix string) ([]copyItem, error) {
-	entries, err := readEnd(s, src)
+func (j *transferJob) walkChildren(s *Server, exp explorer.Explorer, src fileEnd, destPrefix string) ([]copyItem, error) {
+	entries, err := exp.ListDir(src.Path)
 	if err != nil {
 		return nil, err
 	}
 	var out []copyItem
 	for _, e := range entries {
 		child := src
-		child.Path = joinEnd(src, e.Name())
-		rel := destPrefix + "/" + e.Name()
-		item := copyItem{src: child, base: baseName(src), destRel: rel, size: e.Size(), dir: e.IsDir()}
+		child.Path = joinEnd(src, e.Name)
+		rel := destPrefix + "/" + e.Name
+		item := copyItem{src: child, base: baseName(src), destRel: rel, size: e.Size, dir: e.IsDir}
 		out = append(out, item)
-		if e.IsDir() {
-			kids, err := walkChildren(s, child, rel)
+		if e.IsDir {
+			kids, err := j.walkChildren(s, exp, child, rel)
 			if err != nil {
 				return nil, err
 			}
@@ -461,10 +533,22 @@ func walkChildren(s *Server, src fileEnd, destPrefix string) ([]copyItem, error)
 	return out, nil
 }
 
+func (j *transferJob) mkdirRel(s *Server, rel string) error {
+	exp, err := j.fs(s, j.Dest, "dst")
+	if err != nil {
+		return err
+	}
+	return exp.MkDir(joinEnd(j.Dest, rel))
+}
+
 func (j *transferJob) destPath(s *Server, it copyItem) (string, error) {
 	dest := j.Dest
 	dest.Path = joinEnd(j.Dest, it.destRel)
-	_, err := statEnd(s, dest)
+	exp, err := j.fs(s, j.Dest, "dst")
+	if err != nil {
+		return "", err
+	}
+	_, err = exp.Stat(dest.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return dest.Path, nil
@@ -481,7 +565,7 @@ func (j *transferJob) destPath(s *Server, it copyItem) (string, error) {
 	case "overwrite":
 		return dest.Path, nil
 	case "rename":
-		return uniqueEnd(s, j.Dest, it.destRel)
+		return j.uniqueEnd(s, it.destRel)
 	default:
 		return "", errors.New("unknown conflict action")
 	}
@@ -516,43 +600,37 @@ func (j *transferJob) conflictAction(path string) (string, error) {
 }
 
 func (j *transferJob) copyFile(s *Server, it copyItem, destPath string) error {
-	rc, err := openEnd(s, it.src)
+	src, err := j.fs(s, it.src, "src")
+	if err != nil {
+		return err
+	}
+	dst, err := j.fs(s, j.Dest, "dst")
+	if err != nil {
+		return err
+	}
+	rc, err := src.ReadFile(it.src.Path)
 	if err != nil {
 		return err
 	}
 	defer rc.Close()
-	wc, err := createEnd(s, j.Dest.System, j.Dest.ConnID, destPath)
-	if err != nil {
-		return err
+	return dst.WriteFile(destPath, progressReader{ctx: j.ctx, r: rc, j: j}, it.size)
+}
+
+type progressReader struct {
+	ctx context.Context
+	r   io.Reader
+	j   *transferJob
+}
+
+func (p progressReader) Read(b []byte) (int, error) {
+	if err := p.ctx.Err(); err != nil {
+		return 0, err
 	}
-	defer wc.Close()
-	_, err = io.Copy(progressWriter{w: wc, j: j}, ctxReader{ctx: j.ctx, r: rc})
-	return err
-}
-
-type progressWriter struct {
-	w io.Writer
-	j *transferJob
-}
-
-func (p progressWriter) Write(b []byte) (int, error) {
-	n, err := p.w.Write(b)
+	n, err := p.r.Read(b)
 	if n > 0 {
 		p.j.addBytes(int64(n))
 	}
 	return n, err
-}
-
-type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (c ctxReader) Read(p []byte) (int, error) {
-	if err := c.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return c.r.Read(p)
 }
 
 func baseName(e fileEnd) string {
@@ -569,78 +647,8 @@ func joinEnd(dir fileEnd, name string) string {
 	return path.Join(dir.Path, name)
 }
 
-func statEnd(s *Server, e fileEnd) (os.FileInfo, error) {
-	if e.System == "local" {
-		return os.Stat(e.Path)
-	}
-	c, err := s.sftpFrom(e.ConnID)
-	if err != nil {
-		return nil, err
-	}
-	return c.Stat(e.Path)
-}
-
-func readEnd(s *Server, e fileEnd) ([]os.FileInfo, error) {
-	if e.System == "local" {
-		des, err := os.ReadDir(e.Path)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]os.FileInfo, 0, len(des))
-		for _, d := range des {
-			info, err := d.Info()
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, info)
-		}
-		return out, nil
-	}
-	c, err := s.sftpFrom(e.ConnID)
-	if err != nil {
-		return nil, err
-	}
-	return c.ReadDir(e.Path)
-}
-
-func mkdirEnd(s *Server, dest fileEnd, rel string) error {
-	p := joinEnd(dest, rel)
-	if dest.System == "local" {
-		return os.MkdirAll(p, 0o755)
-	}
-	c, err := s.sftpFrom(dest.ConnID)
-	if err != nil {
-		return err
-	}
-	return c.MkdirAll(p)
-}
-
-func openEnd(s *Server, e fileEnd) (io.ReadCloser, error) {
-	if e.System == "local" {
-		return os.Open(e.Path)
-	}
-	c, err := s.sftpFrom(e.ConnID)
-	if err != nil {
-		return nil, err
-	}
-	return c.Open(e.Path)
-}
-
-func createEnd(s *Server, system, connID, p string) (io.WriteCloser, error) {
-	if system == "local" {
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return nil, err
-		}
-		return os.Create(p)
-	}
-	c, err := s.sftpFrom(connID)
-	if err != nil {
-		return nil, err
-	}
-	return c.Create(p)
-}
-
-func uniqueEnd(s *Server, dest fileEnd, rel string) (string, error) {
+func (j *transferJob) uniqueEnd(s *Server, rel string) (string, error) {
+	dest := j.Dest
 	dir := path.Dir(rel)
 	name := path.Base(rel)
 	ext := path.Ext(name)
@@ -655,7 +663,11 @@ func uniqueEnd(s *Server, dest fileEnd, rel string) (string, error) {
 			relNext = dir + "/" + next
 		}
 		p := joinEnd(dest, relNext)
-		_, err := statEnd(s, fileEnd{System: dest.System, ConnID: dest.ConnID, Path: p})
+		exp, err := j.fs(s, dest, "dst")
+		if err != nil {
+			return "", err
+		}
+		_, err = exp.Stat(p)
 		if os.IsNotExist(err) {
 			return p, nil
 		}

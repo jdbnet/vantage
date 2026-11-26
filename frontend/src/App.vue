@@ -3011,7 +3011,7 @@ async function deleteIdentityRow(id: string) {
         <div class="mt-6 border-t border-slate-800 pt-4">
           <h3 class="text-sm font-medium text-white">Inventory backup</h3>
           <p class="mt-1 text-[11px] text-slate-500">
-            Export includes folders, hosts, identities, snippets, tags, and known hosts. Secrets are written in plaintext.
+            Export includes folders, hosts, identities, remotes, snippets, tags, and known hosts. Secrets are written in plaintext.
           </p>
           <div class="mt-3 flex flex-wrap gap-2">
             <button type="button" class="rounded-lg bg-slate-800 px-3 py-1.5 text-sm hover:bg-slate-700" @click="downloadBackup">

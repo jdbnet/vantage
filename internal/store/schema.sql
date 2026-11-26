@@ -111,6 +111,24 @@ CREATE TABLE IF NOT EXISTS known_hosts (
   UNIQUE(hostname, port)
 );
 
+CREATE TABLE IF NOT EXISTS remotes (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  host TEXT,
+  port INTEGER NOT NULL DEFAULT 0,
+  bucket TEXT,
+  region TEXT,
+  path_style INTEGER NOT NULL DEFAULT 0,
+  secure INTEGER NOT NULL DEFAULT 0,
+  username TEXT,
+  sftp_key_auth INTEGER NOT NULL DEFAULT 0,
+  encrypted_blob TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS change_log (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   entity TEXT NOT NULL,

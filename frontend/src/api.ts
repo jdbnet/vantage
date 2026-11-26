@@ -86,6 +86,46 @@ export function withAuthQuery(url: string): string {
   return url + (url.includes("?") ? "&" : "?") + q;
 }
 
+export type HostKeyChallenge = {
+  hostname: string;
+  port: number;
+  key_type: string;
+  fingerprint: string;
+  public_key: string;
+  status: string;
+};
+
+export type RemoteRow = {
+  id: string;
+  label: string;
+  protocol: string;
+  host?: string;
+  port?: number;
+  bucket?: string;
+  region?: string;
+  path_style?: boolean;
+  secure?: boolean;
+  username?: string;
+  sftp_key_auth?: boolean;
+  has_secret?: boolean;
+};
+
+export type RemoteInput = {
+  id?: string;
+  label: string;
+  protocol: string;
+  host?: string;
+  port?: number;
+  bucket?: string;
+  region?: string;
+  path_style?: boolean;
+  secure?: boolean;
+  username?: string;
+  sftp_key_auth?: boolean;
+  secret?: string;
+  passphrase?: string;
+};
+
 export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   const t = sessionToken();
@@ -105,12 +145,20 @@ function authXhr(xhr: XMLHttpRequest): void {
 }
 
 async function handle<T>(res: Response): Promise<T> {
-  const data = (await res.json().catch(() => ({}))) as { error?: string; session?: string };
+  const data = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    session?: string;
+    host_key?: HostKeyChallenge;
+  };
   if (typeof data.session === "string" && data.session) {
     setSessionToken(data.session);
   }
   if (!res.ok) {
-    throw new Error(data.error || res.statusText || "request failed");
+    const err = new Error(data.error || res.statusText || "request failed") as Error & {
+      hostKey?: HostKeyChallenge;
+    };
+    if (data.host_key) err.hostKey = data.host_key;
+    throw err;
   }
   return data as T;
 }
@@ -727,6 +775,109 @@ export const api = {
   sftpStreamUrl(connId: string, path: string): string {
     const q = new URLSearchParams({ path });
     return withAuthQuery(`/api/sftp/${connId}/stream?${q}`);
+  },
+
+  async listRemotes(): Promise<RemoteRow[]> {
+    const res = await apiFetch("/api/remotes", { credentials: "include" });
+    const data = await handle<{ items: RemoteRow[] }>(res);
+    return data.items || [];
+  },
+
+  async remoteProtocols(): Promise<string[]> {
+    const res = await apiFetch("/api/remotes/protocols", { credentials: "include" });
+    const data = await handle<{ protocols: string[] }>(res);
+    return data.protocols || [];
+  },
+
+  async createRemote(body: RemoteInput): Promise<string> {
+    const res = await apiFetch("/api/remotes", {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify(body),
+    });
+    const data = await handle<{ id: string }>(res);
+    return data.id;
+  },
+
+  async updateRemote(id: string, body: RemoteInput): Promise<void> {
+    const res = await apiFetch(`/api/remotes/${id}`, {
+      method: "PUT",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify(body),
+    });
+    await handle(res);
+  },
+
+  async deleteRemote(id: string): Promise<void> {
+    const res = await apiFetch(`/api/remotes/${id}`, { method: "DELETE", credentials: "include" });
+    await handle(res);
+  },
+
+  async testRemote(body: RemoteInput): Promise<void> {
+    const res = await apiFetch("/api/remotes/test", {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify(body),
+    });
+    await handle(res);
+  },
+
+  async trustHostKey(body: HostKeyChallenge): Promise<void> {
+    const res = await apiFetch("/api/remotes/host-key", {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify(body),
+    });
+    await handle(res);
+  },
+
+  async remoteList(id: string, path: string): Promise<{ path: string; entries: SftpEntry[] }> {
+    const res = await apiFetch(`/api/remotes/${id}/list`, {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify({ path }),
+    });
+    return handle(res);
+  },
+
+  async remoteMkdir(id: string, path: string): Promise<void> {
+    const res = await apiFetch(`/api/remotes/${id}/mkdir`, {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify({ path }),
+    });
+    await handle(res);
+  },
+
+  async remoteRename(id: string, from: string, to: string): Promise<void> {
+    const res = await apiFetch(`/api/remotes/${id}/rename`, {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify({ from, to }),
+    });
+    await handle(res);
+  },
+
+  async remoteRemove(id: string, path: string): Promise<void> {
+    const res = await apiFetch(`/api/remotes/${id}/remove`, {
+      method: "POST",
+      credentials: "include",
+      headers: jsonHeaders,
+      body: JSON.stringify({ path }),
+    });
+    await handle(res);
+  },
+
+  remoteStreamUrl(id: string, path: string): string {
+    const q = new URLSearchParams({ path });
+    return withAuthQuery(`/api/remotes/${id}/stream?${q}`);
   },
 
   async createTransfer(

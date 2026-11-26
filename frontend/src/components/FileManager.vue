@@ -12,7 +12,9 @@ import {
   LayoutGrid,
   List,
   Pencil,
+  Plus,
   RefreshCw,
+  Server,
   Trash2,
   X,
 } from "@lucide/vue";
@@ -21,6 +23,9 @@ import {
   apiFetch,
   isDesktopShell,
   type FileTransfer,
+  type HostKeyChallenge,
+  type RemoteInput,
+  type RemoteRow,
   type SftpEntry,
 } from "@/api";
 import { saveRemoteFile } from "@/download";
@@ -30,7 +35,7 @@ const props = defineProps<{
   open: boolean;
 }>();
 
-type Sys = { id: string; kind: "local" | "sftp"; connId: string; label: string };
+type Sys = { id: string; kind: "local" | "sftp" | "remote"; connId: string; label: string };
 type Clip = { kind: "local" | "sftp"; connId: string; paths: string[] };
 
 const activeId = ref("local");
@@ -54,6 +59,50 @@ const applyAll = ref(false);
 let poll: ReturnType<typeof setInterval> | null = null;
 
 const localLabel = computed(() => (isDesktopShell() ? "Local" : "Vantage server"));
+const savedRemotes = ref<RemoteRow[]>([]);
+const protocols = ref<string[]>(["s3", "sftp", "smb", "webdav", "ftp", "nfs"]);
+const showRemoteForm = ref(false);
+const formNote = ref("");
+const remoteForm = ref<RemoteInput>(blankRemote());
+const hostKey = ref<HostKeyChallenge | null>(null);
+
+function defaultRemotePort(protocol: string, secure: boolean): number {
+  switch (protocol) {
+    case "ftp":
+      return 21;
+    case "smb":
+      return 445;
+    case "nfs":
+      return 2049;
+    case "s3":
+      return 443;
+    case "webdav":
+      return secure ? 443 : 80;
+    default:
+      return 22;
+  }
+}
+
+function portIsFixed(protocol: string): boolean {
+  return protocol === "s3" || protocol === "smb" || protocol === "nfs";
+}
+
+function blankRemote(): RemoteInput {
+  return {
+    label: "",
+    protocol: "sftp",
+    host: "",
+    port: 22,
+    bucket: "",
+    region: "",
+    path_style: false,
+    secure: false,
+    username: "",
+    sftp_key_auth: false,
+    secret: "",
+    passphrase: "",
+  };
+}
 
 const systems = computed<Sys[]>(() => [
   { id: "local", kind: "local", connId: "", label: localLabel.value },
@@ -65,7 +114,18 @@ const systems = computed<Sys[]>(() => [
   })),
 ]);
 
-const active = computed(() => systems.value.find((s) => s.id === activeId.value) || systems.value[0]);
+const remoteNav = computed<Sys[]>(() =>
+  savedRemotes.value.map((r) => ({
+    id: "remote:" + r.id,
+    kind: "remote" as const,
+    connId: r.id,
+    label: r.label,
+  })),
+);
+
+const nav = computed(() => [...systems.value, ...remoteNav.value]);
+
+const active = computed(() => nav.value.find((s) => s.id === activeId.value) || nav.value[0]);
 const cwd = computed(() => paths.value[active.value.id] ?? "");
 
 const shown = computed(() => {
@@ -120,13 +180,17 @@ async function load() {
   err.value = "";
   busy.value = true;
   try {
+    const folder = paths.value[sys.id] ?? "";
     const r =
       sys.kind === "local"
-        ? await api.localList(paths.value[sys.id] ?? "")
-        : await api.sftpList(sys.connId, paths.value[sys.id] ?? "");
+        ? await api.localList(folder)
+        : sys.kind === "remote"
+          ? await api.remoteList(sys.connId, folder)
+          : await api.sftpList(sys.connId, folder);
     paths.value = { ...paths.value, [sys.id]: r.path };
     entries.value = r.entries || [];
   } catch (e) {
+    noteHostKey(e);
     err.value = e instanceof Error ? e.message : "List failed";
   } finally {
     busy.value = false;
@@ -161,6 +225,7 @@ async function mkdir() {
   const p = join(cwd.value, name);
   try {
     if (active.value.kind === "local") await api.localMkdir(p);
+    else if (active.value.kind === "remote") await api.remoteMkdir(active.value.connId, p);
     else await api.sftpMkdir(active.value.connId, p);
     await load();
   } catch (e) {
@@ -176,6 +241,7 @@ async function removeEntry(e: SftpEntry) {
   if (!confirm(msg)) return;
   try {
     if (active.value.kind === "local") await api.localRemove(p);
+    else if (active.value.kind === "remote") await api.remoteRemove(active.value.connId, p);
     else await api.sftpRemove(active.value.connId, p, true);
     if (preview.value?.filename === e.filename) preview.value = null;
     await load();
@@ -196,6 +262,7 @@ async function commitRename() {
   if (!oldName || !name || name === oldName) return;
   try {
     if (active.value.kind === "local") await api.localRename(join(cwd.value, oldName), join(cwd.value, name));
+    else if (active.value.kind === "remote") await api.remoteRename(active.value.connId, join(cwd.value, oldName), join(cwd.value, name));
     else await api.sftpRename(active.value.connId, join(cwd.value, oldName), join(cwd.value, name));
     await load();
   } catch (e) {
@@ -258,7 +325,9 @@ async function downloadEntry(e: SftpEntry) {
   const url =
     active.value.kind === "local"
       ? api.localDownloadUrl(p)
-      : api.sftpDownloadUrl(active.value.connId, p);
+      : active.value.kind === "remote"
+        ? api.remoteStreamUrl(active.value.connId, p)
+        : api.sftpDownloadUrl(active.value.connId, p);
   try {
     await saveRemoteFile(url, e.filename);
   } catch (e2) {
@@ -268,9 +337,128 @@ async function downloadEntry(e: SftpEntry) {
 
 function streamUrl(e: SftpEntry): string {
   const p = join(cwd.value, e.filename);
-  return active.value.kind === "local"
-    ? api.localStreamUrl(p)
-    : api.sftpStreamUrl(active.value.connId, p);
+  if (active.value.kind === "local") return api.localStreamUrl(p);
+  if (active.value.kind === "remote") return api.remoteStreamUrl(active.value.connId, p);
+  return api.sftpStreamUrl(active.value.connId, p);
+}
+
+function noteHostKey(e: unknown) {
+  const hk = (e as { hostKey?: HostKeyChallenge }).hostKey;
+  if (hk) hostKey.value = hk;
+}
+
+const bucketLabel = computed(() => {
+  switch (remoteForm.value.protocol) {
+    case "smb":
+      return "Share";
+    case "nfs":
+      return "Export path";
+    case "sftp":
+      return "Remote path (optional)";
+    case "s3":
+      return "Bucket";
+    default:
+      return "Path (optional)";
+  }
+});
+
+async function loadRemotes() {
+  try {
+    savedRemotes.value = await api.listRemotes();
+    protocols.value = await api.remoteProtocols();
+  } catch (e) {
+    err.value = e instanceof Error ? e.message : "Could not load remotes";
+  }
+}
+
+function openRemoteForm(row?: RemoteRow) {
+  remoteForm.value = row
+    ? {
+        id: row.id,
+        label: row.label,
+        protocol: row.protocol,
+        host: row.host || "",
+        port: portIsFixed(row.protocol) ? defaultRemotePort(row.protocol, !!row.secure) : row.port || defaultRemotePort(row.protocol, !!row.secure),
+        bucket: row.bucket || "",
+        region: row.region || "",
+        path_style: !!row.path_style,
+        secure: !!row.secure,
+        username: row.username || "",
+        sftp_key_auth: !!row.sftp_key_auth,
+        secret: "",
+        passphrase: "",
+      }
+    : blankRemote();
+  formNote.value = "";
+  showRemoteForm.value = true;
+}
+
+function onRemoteProtocol() {
+  remoteForm.value.port = defaultRemotePort(remoteForm.value.protocol, remoteForm.value.secure);
+}
+
+function onWebdavSecure() {
+  const port = remoteForm.value.port;
+  if (remoteForm.value.secure) {
+    if (port === 80 || port === 0) remoteForm.value.port = 443;
+  } else if (port === 443 || port === 0) {
+    remoteForm.value.port = 80;
+  }
+}
+
+async function saveRemote() {
+  try {
+    const body = { ...remoteForm.value };
+    if (portIsFixed(body.protocol) || !body.port) {
+      body.port = defaultRemotePort(body.protocol, !!body.secure);
+    }
+    if (body.id) {
+      await api.updateRemote(body.id, body);
+    } else {
+      await api.createRemote(body);
+    }
+    showRemoteForm.value = false;
+    await loadRemotes();
+  } catch (e) {
+    noteHostKey(e);
+    formNote.value = e instanceof Error ? e.message : "Could not save remote";
+  }
+}
+
+async function testRemote() {
+  formNote.value = "";
+  try {
+    await api.testRemote(remoteForm.value);
+    hostKey.value = null;
+    formNote.value = "Connection succeeded";
+  } catch (e) {
+    noteHostKey(e);
+    formNote.value = e instanceof Error ? e.message : "Test failed";
+  }
+}
+
+async function removeRemote(id: string) {
+  if (!confirm("Delete this remote?")) return;
+  try {
+    await api.deleteRemote(id);
+    if (active.value.connId === id && active.value.kind === "remote") openSys("local");
+    await loadRemotes();
+  } catch (e) {
+    err.value = e instanceof Error ? e.message : "Could not delete remote";
+  }
+}
+
+async function trustHostKey() {
+  if (!hostKey.value) return;
+  try {
+    await api.trustHostKey(hostKey.value);
+    hostKey.value = null;
+    err.value = "";
+    if (showRemoteForm.value) await testRemote();
+    else await load();
+  } catch (e) {
+    err.value = e instanceof Error ? e.message : "Could not store the host key";
+  }
 }
 
 function previewKind(e: SftpEntry): "text" | "image" | "pdf" | "audio" | "none" {
@@ -415,7 +603,7 @@ function fmtSize(n: number): string {
 watch(
   () => props.sessions.map((s) => s.tabId).join(","),
   () => {
-    if (!systems.value.some((s) => s.id === activeId.value)) openSys("local");
+    if (!nav.value.some((s) => s.id === activeId.value)) openSys("local");
   },
 );
 
@@ -424,12 +612,14 @@ watch(
   (on) => {
     if (!on) return;
     err.value = "";
+    void loadRemotes();
     void load();
   },
 );
 
 onMounted(() => {
   void load();
+  void loadRemotes();
   void refreshTransfers();
   poll = setInterval(() => void refreshTransfers(), 400);
 });
@@ -457,6 +647,29 @@ onUnmounted(() => {
         <HardDrive v-if="sys.kind === 'local'" class="h-3.5 w-3.5 shrink-0" />
         <Folder v-else class="h-3.5 w-3.5 shrink-0 text-accent" />
         <span class="truncate">{{ sys.label }}</span>
+      </button>
+      <div class="mt-2 flex items-center justify-between px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+        <span>Remotes</span>
+        <button type="button" class="rounded p-1 text-slate-300 hover:bg-slate-800 hover:text-white" title="Add remote" @click="openRemoteForm()">
+          <Plus class="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <button
+        v-for="sys in remoteNav"
+        :key="sys.id"
+        type="button"
+        class="group mx-2 mb-1 flex items-center gap-2 truncate rounded px-2 py-1.5 text-left text-xs"
+        :class="sys.id === active.id ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-800/60'"
+        @click="openSys(sys.id)"
+        @dragover.prevent
+        @drop.prevent="onNavDrop($event, sys)"
+      >
+        <Server class="h-3.5 w-3.5 shrink-0 text-accent" />
+        <span class="min-w-0 flex-1 truncate">{{ sys.label }}</span>
+        <span class="hidden gap-0.5 group-hover:flex" @click.stop>
+          <button type="button" class="rounded p-0.5 hover:text-white" title="Edit" @click="openRemoteForm(savedRemotes.find((r) => r.id === sys.connId))"><Pencil class="h-3 w-3" /></button>
+          <button type="button" class="rounded p-0.5 hover:text-red-400" title="Delete" @click="removeRemote(sys.connId)"><Trash2 class="h-3 w-3" /></button>
+        </span>
       </button>
     </aside>
     <section class="flex min-w-0 flex-1 flex-col">
@@ -529,7 +742,7 @@ onUnmounted(() => {
           <span v-if="!grid" class="w-16 shrink-0 truncate text-[10px] text-slate-400">{{ fileType(e) }}</span>
           <span v-if="!grid" class="w-16 shrink-0 text-right text-[10px] tabular-nums text-slate-500">{{ isDir(e.st_mode) ? "" : fmtSize(e.st_size) }}</span>
           <span v-if="!grid" class="w-40 shrink-0 text-right text-[10px] tabular-nums text-slate-400">{{ fmtTime(e.st_mtime) }}</span>
-          <span class="flex gap-0.5 opacity-0 group-hover:opacity-100" :class="grid ? 'absolute right-1 top-1 rounded-lg bg-surface-raised/90' : ''" @click.stop>
+          <span class="flex shrink-0 justify-end gap-0.5 opacity-0 group-hover:opacity-100" :class="grid ? 'absolute right-1 top-1 rounded-lg bg-surface-raised/90' : 'w-24'" @click.stop>
             <button type="button" class="rounded p-1 text-slate-400 hover:text-white" title="Copy" @click="copyEntry(e)"><Copy class="h-3.5 w-3.5" /></button>
             <button v-if="!isDir(e.st_mode)" type="button" class="rounded p-1 text-slate-400 hover:text-white" title="Download" @click="downloadEntry(e)"><Download class="h-3.5 w-3.5" /></button>
             <button type="button" class="rounded p-1 text-slate-400 hover:text-white" title="Rename" @click="startRename(e)"><Pencil class="h-3.5 w-3.5" /></button>
@@ -565,17 +778,100 @@ onUnmounted(() => {
       </div>
     </section>
     <div v-if="waiting" class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div class="w-full max-w-md rounded-xl border border-slate-800 bg-surface-raised p-4">
-        <h2 class="text-sm font-medium text-white">File already exists</h2>
+      <div class="w-full max-w-lg rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl">
+        <h2 class="text-lg font-semibold text-white">File already exists</h2>
         <p class="mt-2 break-all font-mono text-xs text-slate-400">{{ waiting.conflict }}</p>
-        <label class="mt-3 flex items-center gap-2 text-xs text-slate-300">
+        <label class="mt-3 flex items-center gap-2 text-sm">
           <input v-model="applyAll" type="checkbox" />
           Apply to all remaining files in this transfer
         </label>
-        <div class="mt-4 flex justify-end gap-2">
-          <button type="button" class="rounded bg-slate-800 px-3 py-1.5 text-xs" @click="resolve('skip')">Skip</button>
-          <button type="button" class="rounded bg-slate-800 px-3 py-1.5 text-xs" @click="resolve('rename')">Keep both</button>
-          <button type="button" class="rounded bg-accent px-3 py-1.5 text-xs font-medium text-slate-950" @click="resolve('overwrite')">Overwrite</button>
+        <div class="mt-6 flex justify-end gap-2">
+          <button type="button" class="rounded-lg bg-slate-800 px-4 py-2 text-sm hover:bg-slate-700" @click="resolve('skip')">Skip</button>
+          <button type="button" class="rounded-lg bg-slate-800 px-4 py-2 text-sm hover:bg-slate-700" @click="resolve('rename')">Keep both</button>
+          <button type="button" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-slate-950" @click="resolve('overwrite')">Overwrite</button>
+        </div>
+      </div>
+    </div>
+    <div v-if="showRemoteForm" class="vantage-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <form class="max-h-[90vh] w-full max-w-lg overflow-auto rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl" @submit.prevent="saveRemote">
+        <h2 class="text-lg font-semibold text-white">{{ remoteForm.id ? "Edit remote" : "Add remote" }}</h2>
+        <label class="mt-4 block text-xs uppercase text-slate-500">Name</label>
+        <input v-model="remoteForm.label" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        <label class="mt-3 block text-xs uppercase text-slate-500">Protocol</label>
+        <select v-model="remoteForm.protocol" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" @change="onRemoteProtocol">
+          <option v-for="p in protocols" :key="p" :value="p">{{ p }}</option>
+        </select>
+        <label class="mt-3 block text-xs uppercase text-slate-500">Host</label>
+        <input v-model="remoteForm.host" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        <template v-if="!portIsFixed(remoteForm.protocol)">
+          <label class="mt-3 block text-xs uppercase text-slate-500">Port</label>
+          <input v-model.number="remoteForm.port" type="number" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        </template>
+        <template v-if="remoteForm.protocol !== 'nfs'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">Username</label>
+          <input v-model="remoteForm.username" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        </template>
+        <template v-if="remoteForm.protocol === 'sftp'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">Authentication</label>
+          <select v-model="remoteForm.sftp_key_auth" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm">
+            <option :value="false">Password</option>
+            <option :value="true">Private key</option>
+          </select>
+        </template>
+        <template v-if="remoteForm.protocol !== 'nfs'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">{{ remoteForm.sftp_key_auth ? "Private key" : "Password" }}</label>
+          <textarea
+            v-if="remoteForm.sftp_key_auth"
+            v-model="remoteForm.secret"
+            rows="6"
+            class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 font-mono text-xs"
+            placeholder="Leave blank to keep the saved key"
+          ></textarea>
+          <input
+            v-else
+            v-model="remoteForm.secret"
+            type="password"
+            class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm"
+            placeholder="Leave blank to keep the saved secret"
+          />
+        </template>
+        <template v-if="remoteForm.protocol === 'sftp' && remoteForm.sftp_key_auth">
+          <label class="mt-3 block text-xs uppercase text-slate-500">Key passphrase</label>
+          <input v-model="remoteForm.passphrase" type="password" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        </template>
+        <template v-if="remoteForm.protocol === 's3' || remoteForm.protocol === 'smb' || remoteForm.protocol === 'nfs' || remoteForm.protocol === 'sftp'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">{{ bucketLabel }}</label>
+          <input v-model="remoteForm.bucket" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" />
+        </template>
+        <template v-if="remoteForm.protocol === 's3'">
+          <label class="mt-3 block text-xs uppercase text-slate-500">Region</label>
+          <input v-model="remoteForm.region" class="mt-1 w-full rounded border border-slate-700 bg-surface-overlay px-2 py-1.5 text-sm" placeholder="us-east-1" />
+          <label class="mt-3 flex items-center gap-2 text-sm">
+            <input v-model="remoteForm.path_style" type="checkbox" />
+            Path-style URLs (R2 and other S3-compatible stores)
+          </label>
+        </template>
+        <label v-if="remoteForm.protocol === 'ftp' || remoteForm.protocol === 'webdav'" class="mt-3 flex items-center gap-2 text-sm">
+          <input v-model="remoteForm.secure" type="checkbox" @change="remoteForm.protocol === 'webdav' && onWebdavSecure()" />
+          {{ remoteForm.protocol === "ftp" ? "Explicit TLS" : "HTTPS" }}
+        </label>
+        <p v-if="remoteForm.protocol === 'nfs'" class="mt-3 text-[11px] text-slate-500">NFS rename is not supported by the client library.</p>
+        <p v-if="formNote" class="mt-3 text-sm" :class="formNote === 'Connection succeeded' ? 'text-slate-300' : 'text-red-400'">{{ formNote }}</p>
+        <div class="mt-6 flex justify-end gap-2">
+          <button type="button" class="rounded-lg px-4 py-2 text-sm text-slate-400 hover:bg-slate-800" @click="showRemoteForm = false">Cancel</button>
+          <button type="button" class="rounded-lg bg-slate-800 px-4 py-2 text-sm hover:bg-slate-700" @click="testRemote">Test</button>
+          <button type="submit" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-slate-950">Save</button>
+        </div>
+      </form>
+    </div>
+    <div v-if="hostKey" class="vantage-modal fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
+      <div class="w-full max-w-lg rounded-xl border border-slate-800 bg-surface-raised p-6 shadow-xl">
+        <h2 class="text-lg font-semibold text-white">Unknown host key</h2>
+        <p class="mt-2 text-sm text-slate-300">{{ hostKey.hostname }}:{{ hostKey.port }}</p>
+        <p class="mt-1 break-all font-mono text-xs text-slate-400">{{ hostKey.fingerprint }}</p>
+        <div class="mt-6 flex justify-end gap-2">
+          <button type="button" class="rounded-lg px-4 py-2 text-sm text-slate-400 hover:bg-slate-800" @click="hostKey = null">Reject</button>
+          <button type="button" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-slate-950" @click="trustHostKey">Trust</button>
         </div>
       </div>
     </div>

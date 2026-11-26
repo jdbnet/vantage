@@ -72,6 +72,12 @@ func importSnapshot(st *store.Store, snap map[string]any) (int, error) {
 		}
 		applied++
 	}
+	for _, m := range asMapSlice(snap["remotes"]) {
+		if err := applyImport(st, "remote", m); err != nil {
+			return applied, err
+		}
+		applied++
+	}
 	for _, m := range tagMaps(snap["tags"]) {
 		if err := applyImport(st, "tag", m); err != nil {
 			return applied, err

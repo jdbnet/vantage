@@ -25,6 +25,17 @@ type HostKeyDecision struct {
 	Replace bool
 }
 
+// UntrustedHostKeyError is returned when there is no interactive prompt
+// to accept a new or changed host key.
+type UntrustedHostKeyError struct {
+	Info      HostKeyInfo
+	PublicKey string
+}
+
+func (e *UntrustedHostKeyError) Error() string {
+	return fmt.Sprintf("host key for %s:%d is not trusted", e.Info.Hostname, e.Info.Port)
+}
+
 type Prompt struct {
 	Output  func(text string)
 	Line    func(echo bool) (string, error)
@@ -139,6 +150,12 @@ func isSSHPasswordPrompt(q string) bool {
 	return strings.Contains(l, "password")
 }
 
+// CheckHostKey reports whether hostname:port is in known_hosts.
+// A missing or changed key returns *UntrustedHostKeyError.
+func CheckHostKey(st *store.Store, hostname string, port int, key ssh.PublicKey) error {
+	return checkHostKey(st, nil, hostname, port, key)
+}
+
 func checkHostKey(st *store.Store, prompt *Prompt, hostname string, port int, key ssh.PublicKey) error {
 	fp := ssh.FingerprintSHA256(key)
 	keyType := key.Type()
@@ -161,7 +178,7 @@ func checkHostKey(st *store.Store, prompt *Prompt, hostname string, port int, ke
 		return err
 	}
 	if prompt == nil || prompt.HostKey == nil {
-		return fmt.Errorf("host key for %s:%d is not trusted", hostname, port)
+		return &UntrustedHostKeyError{Info: info, PublicKey: pub}
 	}
 	dec, err := prompt.HostKey(info)
 	if err != nil {

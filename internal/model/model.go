@@ -147,6 +147,23 @@ type BrowseResult struct {
 	SearchActive bool     `json:"search_active"`
 }
 
+type Remote struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Protocol    string `json:"protocol"`
+	Host        string `json:"host,omitempty"`
+	Port        int    `json:"port,omitempty"`
+	Bucket      string `json:"bucket,omitempty"`
+	Region      string `json:"region,omitempty"`
+	PathStyle   bool   `json:"path_style"`
+	Secure      bool   `json:"secure"`
+	Username    string `json:"username,omitempty"`
+	SftpKeyAuth bool   `json:"sftp_key_auth"`
+	HasSecret   bool   `json:"has_secret"`
+	CreatedAt   string `json:"created_at,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+}
+
 type ChangeOp struct {
 	Seq       int64           `json:"seq"`
 	Entity    string          `json:"entity"`

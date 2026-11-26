@@ -382,6 +382,9 @@ func snapshotOps(snap map[string]any) []model.ChangeOp {
 	for _, m := range asMapSlice(snap["identities"]) {
 		ops = append(ops, snapshotOp("identity", m))
 	}
+	for _, m := range asMapSlice(snap["remotes"]) {
+		ops = append(ops, snapshotOp("remote", m))
+	}
 	for _, m := range asMapSlice(snap["tags"]) {
 		ops = append(ops, snapshotOp("tag", m))
 	}

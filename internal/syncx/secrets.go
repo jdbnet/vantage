@@ -10,14 +10,14 @@ import (
 // RewriteOp decrypts vault ciphertext on the way out and re-encrypts on the way in
 // so each replica stores secrets under its own key.
 func RewriteOp(box *cryptox.Box, op model.ChangeOp, outbound bool) model.ChangeOp {
-	if box == nil || (op.Entity != "identity" && op.Entity != "host") {
+	if box == nil || (op.Entity != "identity" && op.Entity != "host" && op.Entity != "remote") {
 		return op
 	}
 	var m map[string]any
 	if json.Unmarshal(op.Payload, &m) != nil {
 		return op
 	}
-	if op.Entity == "identity" {
+	if op.Entity == "identity" || op.Entity == "remote" {
 		rewriteIdentMap(m, box, outbound)
 	}
 	if op.Entity == "host" {
@@ -37,6 +37,9 @@ func RewriteSnapshot(box *cryptox.Box, snap map[string]any, outbound bool) {
 		return
 	}
 	for _, m := range asMapSlice(snap["identities"]) {
+		rewriteIdentMap(m, box, outbound)
+	}
+	for _, m := range asMapSlice(snap["remotes"]) {
 		rewriteIdentMap(m, box, outbound)
 	}
 	for _, m := range asMapSlice(snap["hosts"]) {

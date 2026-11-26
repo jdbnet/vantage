@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/jdbnet/vantage/internal/auth"
+	"github.com/jdbnet/vantage/internal/explorer"
 	"github.com/jdbnet/vantage/internal/cryptox"
 	"github.com/jdbnet/vantage/internal/model"
 	"github.com/jdbnet/vantage/internal/sshx"
@@ -47,6 +48,8 @@ type Server struct {
 	upgr      websocket.Upgrader
 	quick     quickBook
 	transfers *transferBook
+	remotes   *remotePool
+	openHook  func(fileEnd, bool) (explorer.Explorer, func(), error)
 }
 
 func New(d Deps) http.Handler {
@@ -60,6 +63,7 @@ func New(d Deps) http.Handler {
 		},
 		transfers: newTransferBook(),
 	}
+	s.remotes = newRemotePool(s)
 	mux := http.NewServeMux()
 	s.mux = mux
 
@@ -135,6 +139,21 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/local/remove", s.auth("sftp:manage", s.handleLocalRemove))
 	mux.HandleFunc("GET /api/local/download", s.auth("sftp:manage", s.handleLocalDownload))
 	mux.HandleFunc("GET /api/local/stream", s.auth("sftp:manage", s.handleLocalStream))
+
+	mux.HandleFunc("GET /api/remotes", s.auth("sftp:manage", s.handleListRemotes))
+	mux.HandleFunc("POST /api/remotes", s.auth("sftp:manage", s.handleCreateRemote))
+	mux.HandleFunc("GET /api/remotes/protocols", s.auth("sftp:manage", s.handleRemoteProtocols))
+	mux.HandleFunc("POST /api/remotes/test", s.auth("sftp:manage", s.handleTestRemote))
+	mux.HandleFunc("POST /api/remotes/host-key", s.auth("sftp:manage", s.handleTrustHostKey))
+	mux.HandleFunc("PUT /api/remotes/{id}", s.auth("sftp:manage", s.handleUpdateRemote))
+	mux.HandleFunc("DELETE /api/remotes/{id}", s.auth("sftp:manage", s.handleDeleteRemote))
+	mux.HandleFunc("POST /api/remotes/{id}/test", s.auth("sftp:manage", s.handleTestRemote))
+	mux.HandleFunc("POST /api/remotes/{id}/host-key", s.auth("sftp:manage", s.handleTrustHostKey))
+	mux.HandleFunc("POST /api/remotes/{id}/list", s.auth("sftp:manage", s.handleRemoteList))
+	mux.HandleFunc("POST /api/remotes/{id}/mkdir", s.auth("sftp:manage", s.handleRemoteMkdir))
+	mux.HandleFunc("POST /api/remotes/{id}/rename", s.auth("sftp:manage", s.handleRemoteRename))
+	mux.HandleFunc("POST /api/remotes/{id}/remove", s.auth("sftp:manage", s.handleRemoteRemove))
+	mux.HandleFunc("GET /api/remotes/{id}/stream", s.auth("sftp:manage", s.handleRemoteStream))
 
 	mux.HandleFunc("POST /api/files/transfers", s.auth("sftp:manage", s.handleCreateTransfer))
 	mux.HandleFunc("GET /api/files/transfers", s.auth("sftp:manage", s.handleListTransfers))

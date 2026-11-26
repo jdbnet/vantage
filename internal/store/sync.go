@@ -147,6 +147,26 @@ func (s *Store) BackfillChangeLog() (int, error) {
 		}
 	}
 
+	remotes, err := s.ListRemotes()
+	if err != nil {
+		return 0, err
+	}
+	for _, rm := range remotes {
+		rec, err := s.GetRemote(rm.ID)
+		if err != nil {
+			continue
+		}
+		ts := coalesce(rm.UpdatedAt, now())
+		if err := add("remote", rm.ID, ts, map[string]any{
+			"id": rm.ID, "label": rm.Label, "protocol": rm.Protocol, "host": rm.Host, "port": rm.Port,
+			"bucket": rm.Bucket, "region": rm.Region, "path_style": rm.PathStyle, "secure": rm.Secure,
+			"username": rm.Username, "sftp_key_auth": rm.SftpKeyAuth, "encrypted_blob": rec.Blob,
+			"created_at": rm.CreatedAt, "updated_at": ts,
+		}); err != nil {
+			return 0, err
+		}
+	}
+
 	tags, err := s.ListTagRecords()
 	if err != nil {
 		return 0, err
@@ -232,6 +252,7 @@ func (s *Store) missingChangeLogCount() (int, error) {
 		SELECT
 			(SELECT COUNT(*) FROM folders f WHERE f.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'folder' AND c.entity_id = f.id))
 			+ (SELECT COUNT(*) FROM identities i WHERE i.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'identity' AND c.entity_id = i.id))
+			+ (SELECT COUNT(*) FROM remotes r WHERE r.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'remote' AND c.entity_id = r.id))
 			+ (SELECT COUNT(*) FROM tags t WHERE t.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'tag' AND c.entity_id = t.id))
 			+ (SELECT COUNT(*) FROM hosts h WHERE h.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'host' AND c.entity_id = h.id))
 			+ (SELECT COUNT(*) FROM snippets s WHERE s.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.entity = 'snippet' AND c.entity_id = s.id))
@@ -287,6 +308,8 @@ func (s *Store) localUpdatedAt(entity, id string) (string, error) {
 		table = "folders"
 	case "identity":
 		table = "identities"
+	case "remote":
+		table = "remotes"
 	case "snippet":
 		table = "snippets"
 	case "tag":
@@ -323,6 +346,8 @@ func (s *Store) applyOpTx(tx *sql.Tx, op model.ChangeOp) error {
 		return upsertFolderTx(tx, payload, op.UpdatedAt)
 	case "identity":
 		return upsertIdentityTx(tx, payload, op.UpdatedAt)
+	case "remote":
+		return upsertRemoteTx(tx, payload, op.UpdatedAt)
 	case "host":
 		return upsertHostTx(tx, payload, op.UpdatedAt)
 	case "snippet":
@@ -343,6 +368,8 @@ func (s *Store) applyDeleteTx(tx *sql.Tx, op model.ChangeOp) error {
 		table = "folders"
 	case "identity":
 		table = "identities"
+	case "remote":
+		table = "remotes"
 	case "host":
 		table = "hosts"
 	case "snippet":
@@ -400,6 +427,69 @@ func upsertIdentityTx(tx *sql.Tx, p map[string]any, ts string) error {
 		nullStr(ptrField(p, "encrypted_key_passphrase")), coalesce(strField(p, "created_at"), ts), ts,
 	)
 	return err
+}
+
+func upsertRemoteTx(tx *sql.Tx, p map[string]any, ts string) error {
+	id := strField(p, "id")
+	_, err := tx.Exec(
+		`INSERT INTO remotes(id, label, protocol, host, port, bucket, region, path_style, secure, username, sftp_key_auth, encrypted_blob, created_at, updated_at, deleted_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+		 ON CONFLICT(id) DO UPDATE SET label=excluded.label, protocol=excluded.protocol, host=excluded.host, port=excluded.port,
+		   bucket=excluded.bucket, region=excluded.region, path_style=excluded.path_style, secure=excluded.secure,
+		   username=excluded.username, sftp_key_auth=excluded.sftp_key_auth, encrypted_blob=excluded.encrypted_blob,
+		   updated_at=excluded.updated_at, deleted_at=NULL`,
+		id, strField(p, "label"), strField(p, "protocol"), nullStr(ptrField(p, "host")), intField(p, "port"),
+		nullStr(ptrField(p, "bucket")), nullStr(ptrField(p, "region")), boolField(p, "path_style"), boolField(p, "secure"),
+		nullStr(ptrField(p, "username")), boolField(p, "sftp_key_auth"), nullStr(ptrField(p, "encrypted_blob")),
+		coalesce(strField(p, "created_at"), ts), ts,
+	)
+	return err
+}
+
+func intField(m map[string]any, k string) int {
+	switch v := m[k].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case json.Number:
+		i, _ := v.Int64()
+		return int(i)
+	case bool:
+		if v {
+			return 1
+		}
+	case string:
+		n := 0
+		for _, c := range v {
+			if c < '0' || c > '9' {
+				return 0
+			}
+			n = n*10 + int(c-'0')
+		}
+		return n
+	default:
+		return 0
+	}
+	return 0
+}
+
+func boolField(m map[string]any, k string) int {
+	switch v := m[k].(type) {
+	case bool:
+		if v {
+			return 1
+		}
+	case float64:
+		if v != 0 {
+			return 1
+		}
+	case string:
+		if v == "1" || v == "true" {
+			return 1
+		}
+	}
+	return 0
 }
 
 func upsertSnippetTx(tx *sql.Tx, p map[string]any, ts string) error {
@@ -552,6 +642,10 @@ func (s *Store) Snapshot() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	remotes, err := s.ListRemotes()
+	if err != nil {
+		return nil, err
+	}
 	identRecs := make([]map[string]any, 0, len(idents))
 	for _, i := range idents {
 		rec, err := s.GetIdentity(i.ID)
@@ -578,11 +672,25 @@ func (s *Store) Snapshot() (map[string]any, error) {
 			"created_at": h.CreatedAt, "updated_at": h.UpdatedAt,
 		})
 	}
+	remoteRecs := make([]map[string]any, 0, len(remotes))
+	for _, rm := range remotes {
+		rec, err := s.GetRemote(rm.ID)
+		if err != nil {
+			continue
+		}
+		remoteRecs = append(remoteRecs, map[string]any{
+			"id": rm.ID, "label": rm.Label, "protocol": rm.Protocol, "host": rm.Host, "port": rm.Port,
+			"bucket": rm.Bucket, "region": rm.Region, "path_style": rm.PathStyle, "secure": rm.Secure,
+			"username": rm.Username, "sftp_key_auth": rm.SftpKeyAuth, "encrypted_blob": rec.Blob,
+			"created_at": rm.CreatedAt, "updated_at": rm.UpdatedAt,
+		})
+	}
 	return map[string]any{
 		"replica_id":  s.replicaID,
 		"folders":     folders,
 		"hosts":       hostRecs,
 		"identities":  identRecs,
+		"remotes":     remoteRecs,
 		"snippets":    snips,
 		"tags":        tags,
 		"known_hosts": known,
