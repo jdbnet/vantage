@@ -24,6 +24,9 @@ type Params struct {
 	EnableDrive bool
 	DrivePath   string
 	DriveName   string
+	// ServerLayout is a guacd RDP keymap name, such as en-gb-qwerty.
+	// Empty leaves guacd on its default, en-us-qwerty.
+	ServerLayout string
 }
 
 // guacdIdleTimeout is how long a display may sit without a new instruction
@@ -98,6 +101,9 @@ func buildConfig(p Params) *guac.Config {
 		cfg.Parameters["enable-wallpaper"] = "true"
 		cfg.Parameters["enable-theming"] = "true"
 		cfg.Parameters["enable-font-smoothing"] = "true"
+		if layout := strings.TrimSpace(p.ServerLayout); layout != "" {
+			cfg.Parameters["server-layout"] = layout
+		}
 		if p.EnableDrive && p.DrivePath != "" {
 			cfg.Parameters["enable-drive"] = "true"
 			cfg.Parameters["drive-path"] = p.DrivePath

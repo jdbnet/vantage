@@ -437,6 +437,12 @@ func (s *Server) handleGuacWS(w http.ResponseWriter, r *http.Request) {
 		params.EnableDrive = true
 		params.DrivePath = s.rdpDrivePath(st)
 		params.DriveName = "Vantage"
+		params.ServerLayout = guacx.DetectServerLayout()
+		if params.ServerLayout == "" {
+			log.Printf("rdp keyboard: no local layout detected; guacd will use en-us-qwerty")
+		} else {
+			log.Printf("rdp keyboard: server-layout=%s", params.ServerLayout)
+		}
 		logSharedDrive(abs, params.DrivePath)
 	}
 	tunnel, err := guacx.Open(params)
