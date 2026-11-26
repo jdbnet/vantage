@@ -12,7 +12,7 @@ const props = defineProps<{
 
 const kind = () => props.kind || "sftp";
 
-const path = ref("/");
+const path = ref("");
 const entries = ref<SftpEntry[]>([]);
 const err = ref("");
 const busy = ref(false);
@@ -34,7 +34,7 @@ function sortEntries(list: SftpEntry[]): SftpEntry[] {
 }
 
 function joinRemote(base: string, name: string): string {
-  if (base === "/") return `/${name}`.replace("//", "/");
+  if (base === "" || base === "/") return `/${name}`.replace("//", "/");
   return `${base.replace(/\/$/, "")}/${name}`;
 }
 
@@ -58,7 +58,7 @@ async function load() {
 watch(
   () => [props.connId, props.hostId, props.kind],
   () => {
-    path.value = "/";
+    path.value = kind() === "shared" ? "/" : "";
     load();
   },
   { immediate: true },
@@ -73,7 +73,7 @@ function enter(e: SftpEntry) {
 }
 
 function parent() {
-  if (path.value === "/") return;
+  if (path.value === "" || path.value === "/") return;
   const parts = path.value.replace(/\/$/, "").split("/");
   parts.pop();
   path.value = parts.length ? parts.join("/") || "/" : "/";

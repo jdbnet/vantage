@@ -34,12 +34,16 @@ func (s *Server) handleSftpList(w http.ResponseWriter, r *http.Request) {
 		Path string `json:"path"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	p, err := sanitizePath(body.Path)
+	p, err := sftpListPath(c, body.Path)
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return
 	}
 	fis, err := c.ReadDir(p)
+	if err != nil && strings.TrimSpace(body.Path) == "" && p != "/" {
+		p = "/"
+		fis, err = c.ReadDir(p)
+	}
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return
@@ -193,6 +197,21 @@ func (s *Server) handleSftpDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+path.Base(p)+"\"")
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = io.Copy(w, f)
+}
+
+func sftpListPath(c *sftp.Client, requested string) (string, error) {
+	if strings.TrimSpace(requested) != "" {
+		return sanitizePath(requested)
+	}
+	wd, err := c.Getwd()
+	if err != nil || strings.TrimSpace(wd) == "" {
+		return "/", nil
+	}
+	p, err := sanitizePath(wd)
+	if err != nil {
+		return "/", nil
+	}
+	return p, nil
 }
 
 func sanitizePath(p string) (string, error) {
