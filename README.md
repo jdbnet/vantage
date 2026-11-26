@@ -1,28 +1,23 @@
-# Vantage
+<div align="center">
+  <img src="frontend/public/favicon.svg" alt="Vantage" width="128" />
 
-Vantage is a local-first SSH, VNC, and RDP client. Use the desktop app on your computer, and optionally run a small server (vantaged) if you want the same inventory on more than one machine.
+  # Vantage
+</div>
 
-VNC and RDP go through [Apache Guacamole's guacd](https://guacamole.apache.org/doc/gug/guacamole-docker.html). Install guacd yourself and point Vantage at it in Settings (`host:4822`). Vantage does not ship guacd.
+Local-first SSH, VNC, and RDP client. The desktop app stores its own inventory. [vantaged](#vantaged) is the same app as a server, for a browser UI and for syncing that inventory between machines.
+
+VNC and RDP require [guacd](https://guacamole.apache.org/doc/gug/guacamole-docker.html). Vantage does not ship it. Set **guacd address** in Settings (`host:4822`).
 
 Downloads: [GitHub Releases](https://github.com/jdbnet/vantage/releases).
 
-## Install the desktop app
+## Desktop
 
-### Windows
-
-Download the installer (`vantage_*_windows_amd64-setup.exe`) from the latest release and run it.
-
-### macOS
-
-Download the `.zip`, open it, and drag **Vantage** to Applications. The app is unsigned, so you may need to right-click and choose Open the first time.
-
-### Linux (.deb)
-
-Install the Debian package from the release, or from our APT repository:
-
-```bash
-sudo apt install ./vantage_*_amd64.deb
-```
+| Platform | Install |
+| --- | --- |
+| Windows | Run `vantage_*_windows_amd64-setup.exe` |
+| macOS | Unzip and move **Vantage** to Applications. The build is unsigned: right-click, then Open, the first time |
+| Linux (.deb) | `sudo apt install ./vantage_*_amd64.deb`, or the APT repo below |
+| Linux (binary) | `chmod +x vantage_*_linux_amd64 && ./vantage_*_linux_amd64` |
 
 ```bash
 curl -fsSL https://apt.jdbnet.co.uk/install/stable.sh | sudo bash
@@ -30,26 +25,11 @@ sudo apt update
 sudo apt install vantage
 ```
 
-The package depends on GTK 3 and WebKitGTK.
+The Linux builds need GTK 3 and WebKitGTK 4.1. The bare binary copies itself to `~/.local/share/vantage/` on first launch and adds an application menu entry. No root required.
 
-### Linux (download and run)
+On first launch, create the operator account, then add identities and hosts. For VNC or RDP, point Settings at guacd.
 
-Download `vantage_*_linux_amd64`, mark it executable, and run it:
-
-```bash
-chmod +x vantage_*_linux_amd64
-./vantage_*_linux_amd64
-```
-
-On first launch it copies itself to `~/.local/share/vantage/`, adds a **Vantage** entry to your application menu, and starts from there. No root required. Needs GTK 3 and WebKitGTK 4.1.
-
-## First launch
-
-1. Open Vantage and create an operator account.
-2. Add identities (passwords or SSH keys) and hosts.
-3. For VNC or RDP, install guacd and set **guacd address** in Settings, usually `127.0.0.1:4822`.
-
-A typical guacd container on the same machine as the desktop app. Bind-mount the desktop shared folder at the same path inside the container, because that is the path the desktop sends as the RDP drive:
+Desktop guacd on the same machine. The bind mount must be the desktop shared folder, because that path is the RDP drive:
 
 ```bash
 docker run -d --name guacd -p 4822:4822 \
@@ -57,11 +37,11 @@ docker run -d --name guacd -p 4822:4822 \
   guacamole/guacd:1.6.0
 ```
 
-If you instead point the desktop at vantaged's guacd, you do not need a local guacd. The guest then uses vantaged's shared folder (see below).
+Leave **Drive path inside guacd** blank when that path matches. If Settings points at vantaged's guacd instead, the guest uses vantaged's `/data/shared`.
 
-## Optional: vantaged server
+## vantaged
 
-vantaged is the same app as a headless server with a browser UI. Use it when you want a shared inventory, or to open sessions from a browser. It is published as a Docker image, not a standalone binary.
+Headless server and browser UI. Published as a container. `linux/amd64` and `linux/arm64`. Tags are the release version and `latest`.
 
 ```bash
 docker run -d --name vantaged \
@@ -70,9 +50,9 @@ docker run -d --name vantaged \
   ghcr.io/jdbnet/vantaged:latest
 ```
 
-Then open `http://127.0.0.1:7687` and create the operator account. That image has no shell and no `chmod`. Do not `docker exec` into it for filesystem tools.
+Open `http://127.0.0.1:7687` and create the operator account.
 
-For RDP, run guacd on the same Docker network and set Settings **guacd address** to `guacd:4822`. The RDP drive is `/data/shared` inside both containers, so that folder must be mounted in **both**:
+RDP needs guacd on the same Docker network. The drive path is `/data/shared` in both containers:
 
 ```yaml
 services:
@@ -88,7 +68,9 @@ services:
       - ./data/shared:/data/shared
 ```
 
-vantaged runs as UID 65532. guacamole/guacd runs as UID 1000. The host directory must be writable by vantaged, and the shared folder must be traversable and writable by both:
+Set **guacd address** to `guacd:4822`. Leave **Drive path inside guacd** blank.
+
+vantaged runs as UID 65532. guacamole/guacd runs as UID 1000. The data directory must be writable by 65532. Only `data/shared` must be writable by both. Do not make the rest of `data` world-writable; that directory holds the SQLite vault.
 
 ```bash
 mkdir -p data/shared
@@ -97,22 +79,14 @@ chmod a+x data
 chmod -R a+rwX data/shared
 ```
 
-Do not chmod the whole `data` tree world-writable (that is the SQLite vault). Only `data/shared` needs `a+rwX`. The vantaged image cannot run `chmod`; do it on the host, or `docker exec -u 0 <guacd-container> chmod -R a+rwX /data/shared`.
+A named volume for `/data` works the same way: create `/data/shared` on first start, then fix ownership. A bind mount owned by your login user fails with `unable to open database file (14)`.
 
-A named volume for `/data` is fine instead of `./data`. Create `/data/shared` on first start, then fix permissions the same way. If you bind-mount a directory owned by your login user, SQLite fails with `unable to open database file (14)`.
+## Sync
 
-Leave **Drive path inside guacd** blank when the mounts match (`/data/shared` in both). The `Download` folder inside the drive is created by guacd for browser file transfer and is not synced.
+On vantaged, create an API key with the `sync` scope. In the desktop Settings, set the vantaged URL and that key. Folders, hosts, tags, identities, remotes, snippets, and known hosts replicate both ways. Last write wins.
 
-Images are tagged with the release version (`ghcr.io/jdbnet/vantaged:1.2.3`) and `latest`. Architectures: `linux/amd64` and `linux/arm64`.
-
-## Sync desktop with vantaged
-
-On vantaged, create an API key with the `sync` scope. In the desktop app Settings, paste the vantaged URL and that API key. Hosts, folders, tags, identities, snippets, and known hosts replicate both ways (last write wins).
-
-Shared files sync into the desktop data folder:
+Shared files land in the desktop data folder:
 
 - Linux: `~/.local/share/vantage/shared`
 - Windows: `%LOCALAPPDATA%\vantage\shared`
 - macOS: `~/Library/Application Support/vantage/shared`
-
-There is no shared-folder setting on the desktop. If **guacd address** is this machine (`127.0.0.1`), RDP uses that local folder. If it is vantaged's guacd, RDP uses vantaged's `/data/shared`, so the guest matches the web UI.
